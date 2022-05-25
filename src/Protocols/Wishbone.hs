@@ -5,9 +5,16 @@
 
 module Protocols.Wishbone where
 
-import           Clash.Prelude
+import           Clash.Prelude hiding ((&&))
 
 import           Protocols.Internal
+
+import           Protocols.Df (Data, Data(..))
+
+import qualified Clash.Explicit.Prelude as E
+import Control.Arrow (first, second)
+import Control.Monad.State (gets, modify, put, runState)
+import Control.Monad (when)
 
 -- | Data communicated from a Wishbone Master to a Wishbone Slave
 data WishboneM2S bytes addressWidth
@@ -101,3 +108,54 @@ wishboneS2M SNat
   , retry = False
   , stall = False
   }
+
+-- | Wishbone to Df source
+--
+-- * Writing to the given address, pushes an item onto the fifo
+-- * Reading always returns zero
+-- * Writing to other addresses are acknowledged, but ignored
+-- * Asserts stall when the FIFO is full
+wishboneSource ::
+  (1 + n) ~ depth =>
+  HiddenClockResetEnable dom =>
+  KnownNat bytes =>
+  KnownNat addressWidth =>
+  KnownNat depth =>
+  -- | Bytes of data
+  SNat bytes ->
+  -- | Address to respond to
+  BitVector addressWidth ->
+  -- | Depth of the FIFO
+  SNat depth ->
+  -- |
+  Signal dom (WishboneM2S bytes addressWidth, Ack) ->
+  -- |
+  Signal dom (WishboneS2M bytes, Data (BitVector (8 * bytes)))
+wishboneSource bytes respondAddress fifoDepth = mealy machineAsFunction s0 where
+
+  machineAsFunction s i = (s',o) where (o,s') = runState (fullStateMachine i) s
+
+  s0 = (NoData, E.replicate fifoDepth NoData)
+
+  fullStateMachine (m2s, ack) = (,) <$> leftStateMachine m2s <*> rightStateMachine ack
+
+  leftStateMachine m2s
+    | addr m2s == respondAddress && busCycle m2s && writeEnable m2s = pushInput (writeData m2s)
+    | busCycle m2s = pure ((wishboneS2M bytes) { acknowledge = True })
+    | otherwise = pure (wishboneS2M bytes)
+
+  rightStateMachine (Ack ack) = do
+    when ack $ modify $ first $ const NoData
+    noDataPresent <- gets ((== NoData) . fst)
+    when noDataPresent (popOutput fifoDepth)
+    gets fst
+
+  pushInput inpData = do
+    buf <- gets snd
+    if (E.last buf /= NoData) then pure ((wishboneS2M bytes) { stall = True }) else do
+      modify $ second $ const (Data inpData +>> buf)
+      pure ((wishboneS2M bytes) { acknowledge = True })
+
+  popOutput _ = do -- TODO it's really stupid that the typechecker needs this blank param
+    buf <- gets snd
+    put (E.head buf, buf <<+ NoData)
