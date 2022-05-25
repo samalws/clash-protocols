@@ -263,7 +263,7 @@ wishboneS2M
 -- * Asserts stall when the FIFO is full
 wishboneSource ::
   (1 + n) ~ depth =>
-  HiddenClockResetEnable dom =>
+  KnownDomain dom =>
   KnownNat addressWidth =>
   KnownNat depth =>
   NFDataX dat =>
@@ -273,7 +273,7 @@ wishboneSource ::
   SNat depth ->
   -- |
   Circuit (Wishbone dom 'Standard {- TODO -} addressWidth dat) (Df dom dat)
-wishboneSource respondAddress fifoDepth = Circuit (unbundle . mealy machineAsFunction s0 . bundle) where
+wishboneSource respondAddress fifoDepth = Circuit (unbundle . E.mealy clockGen resetGen enableGen machineAsFunction s0 . bundle) where
 
   machineAsFunction s i = (s',o) where (o,s') = runState (fullStateMachine i) s
 
@@ -304,9 +304,10 @@ wishboneSource respondAddress fifoDepth = Circuit (unbundle . mealy machineAsFun
 -- * Writes are acknowledged, but ignored
 -- * Reads from any other address are acknowledged, but the fifo element is not popped.
 -- * Asserts stall when the FIFO is empty
+-- TODO change this description
 wishboneSink ::
   (1 + n) ~ depth =>
-  HiddenClockResetEnable dom =>
+  KnownDomain dom =>
   KnownNat addressWidth =>
   KnownNat depth =>
   KnownNat (BitSize dat) =>
@@ -317,7 +318,7 @@ wishboneSink ::
   SNat depth ->
   -- |
   Circuit (Df dom dat) (Wishbone dom 'Standard {- TODO -} addressWidth dat)
-wishboneSink respondAddress fifoDepth = Circuit (unbundle . mealy (machineAsFunction) s0 . bundle) where
+wishboneSink respondAddress fifoDepth = Circuit (unbundle . E.mealy clockGen resetGen enableGen machineAsFunction s0 . bundle) where
 
   machineAsFunction s i = (s',o) where (o,s') = runState (fullStateMachine i) s
 
