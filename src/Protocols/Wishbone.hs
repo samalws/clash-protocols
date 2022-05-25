@@ -33,6 +33,11 @@ import qualified Hedgehog.Internal.Property as H
 import qualified Hedgehog.Internal.Show     as H
 import           Text.Show.Pretty           (ppShow)
 
+import           Protocols.Df               (Data(..), Df)
+import qualified Clash.Explicit.Prelude     as E
+import           Control.Monad.State        (get, gets, modify, put, runState)
+import           Control.Monad              (when)
+
 -- | Data communicated from a Wishbone Master to a Wishbone Slave
 data WishboneM2S addressWidth selWidth dat
   = WishboneM2S
@@ -227,7 +232,7 @@ validateStandard m2s s2m = go 0 (Prelude.zip m2s s2m) Quiet
       Left err  -> Left (n, err)
       Right st' -> go (n + 1) rest st'
 
-wishboneM2S :: (KnownNat addressWidth, KnownNat (BitSize dat)) => WishboneM2S addressWidth (BitSize dat `DivRU` 8) dat
+wishboneM2S :: WishboneM2S addressWidth selWidth dat
 wishboneM2S
   = WishboneM2S
   { addr = Clash.Prelude.undefined
@@ -249,3 +254,92 @@ wishboneS2M
   , retry = False
   , stall = False
   }
+
+-- | Wishbone to Df source
+--
+-- * Writing to the given address, pushes an item onto the fifo
+-- * Reading always returns zero
+-- * Writing to other addresses are acknowledged, but ignored
+-- * Asserts stall when the FIFO is full
+wishboneSource ::
+  (1 + n) ~ depth =>
+  HiddenClockResetEnable dom =>
+  KnownNat addressWidth =>
+  KnownNat depth =>
+  NFDataX dat =>
+  -- | Address to respond to
+  BitVector addressWidth ->
+  -- | Depth of the FIFO
+  SNat depth ->
+  -- |
+  Circuit (Wishbone dom 'Standard {- TODO -} addressWidth dat) (Df dom dat)
+wishboneSource respondAddress fifoDepth = Circuit (unbundle . mealy machineAsFunction s0 . bundle) where
+
+  machineAsFunction s i = (s',o) where (o,s') = runState (fullStateMachine i) s
+
+  s0 = E.replicate fifoDepth NoData
+
+  fullStateMachine (m2s, (Ack ack)) = do
+    when ack $ modify (<<+ NoData)
+    leftOtp <- leftStateMachine m2s
+    rightOtp <- gets E.head
+    pure (leftOtp, rightOtp)
+
+  leftStateMachine m2s
+    | busCycle m2s && addr m2s == respondAddress && writeEnable m2s = pushInput (writeData m2s)
+    | busCycle m2s = pure (wishboneS2M { acknowledge = True })
+    | otherwise = pure wishboneS2M
+
+  pushInput inpData = do
+    buf <- get
+    case (E.last buf) of
+      NoData -> do
+        put (Data inpData +>> buf)
+        pure (wishboneS2M { acknowledge = True })
+      _ -> pure (wishboneS2M { stall = True })
+
+-- | Wishbone to Df sink
+--
+-- * Reading from the given address, pops an item from the fifo
+-- * Writes are acknowledged, but ignored
+-- * Reads from any other address are acknowledged, but the fifo element is not popped.
+-- * Asserts stall when the FIFO is empty
+wishboneSink ::
+  (1 + n) ~ depth =>
+  HiddenClockResetEnable dom =>
+  KnownNat addressWidth =>
+  KnownNat depth =>
+  KnownNat (BitSize dat) =>
+  NFDataX dat =>
+  -- | Address to respond to
+  BitVector addressWidth ->
+  -- | Depth of the FIFO
+  SNat depth ->
+  -- |
+  Circuit (Df dom dat) (Wishbone dom 'Standard {- TODO -} addressWidth dat)
+wishboneSink respondAddress fifoDepth = Circuit (unbundle . mealy (machineAsFunction) s0 . bundle) where
+
+  machineAsFunction s i = (s',o) where (o,s') = runState (fullStateMachine i) s
+
+  s0 = E.replicate fifoDepth NoData
+
+  fullStateMachine (inpData, s2m) = do
+    right <- rightStateMachine s2m
+    left <- leftStateMachine inpData
+    pure (left, right)
+
+  leftStateMachine NoData = pure (Ack False)
+  leftStateMachine inpData@(Data _) = do
+    buf <- get
+    case (E.last buf) of
+      NoData -> do
+        put (inpData +>> buf)
+        pure (Ack True)
+      _ -> pure (Ack False)
+
+  rightStateMachine s2m = do
+    when (acknowledge s2m) (modify (<<+ NoData))
+    toSend <- gets E.head
+    pure $ case toSend of
+      NoData -> wishboneM2S
+      (Data toSend') -> wishboneM2S { writeData = toSend', addr = respondAddress, busCycle = True, writeEnable = True }
