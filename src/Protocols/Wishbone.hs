@@ -9,7 +9,7 @@ import           Clash.Prelude hiding ((&&), not)
 
 import           Protocols.Internal
 
-import           Protocols.Df (Data, Data(..))
+import           Protocols.Df (Data(..), Df)
 
 import qualified Clash.Explicit.Prelude as E
 import Control.Monad.State (get, gets, modify, put, runState)
@@ -127,10 +127,8 @@ wishboneSource ::
   -- | Depth of the FIFO
   SNat depth ->
   -- |
-  Signal dom (WishboneM2S bytes addressWidth, Ack) ->
-  -- |
-  Signal dom (WishboneS2M bytes, Data (BitVector (8 * bytes)))
-wishboneSource bytes respondAddress fifoDepth = mealy machineAsFunction s0 where
+  Circuit (Wishbone dom 'Standard {- TODO -} bytes addressWidth) (Df dom (BitVector (8 * bytes)))
+wishboneSource bytes respondAddress fifoDepth = Circuit (unbundle . mealy machineAsFunction s0 . bundle) where
 
   machineAsFunction s i = (s',o) where (o,s') = runState (fullStateMachine i) s
 
@@ -167,38 +165,35 @@ wishboneSink ::
   KnownNat depth =>
   -- | Bytes of data
   SNat bytes ->
+  -- | Number of bits in address to respond to
+  SNat addressWidth ->
   -- | Address to respond to
   BitVector addressWidth ->
   -- | Depth of the FIFO
   SNat depth ->
   -- |
-  Signal dom (WishboneM2S bytes addressWidth, Data (BitVector (8 * bytes))) ->
-  -- |
-  Signal dom (WishboneS2M bytes, Ack)
-wishboneSink bytes respondAddress fifoDepth = mealy machineAsFunction s0 where
+  Circuit (Df dom (BitVector (8 * bytes))) (Wishbone dom 'Standard {- TODO -} bytes addressWidth)
+wishboneSink bytes addressWidth respondAddress fifoDepth = Circuit (unbundle . mealy machineAsFunction s0 . bundle) where
 
   machineAsFunction s i = (s',o) where (o,s') = runState (fullStateMachine i) s
 
   s0 = E.replicate fifoDepth NoData
 
-  fullStateMachine (m2s,inpData) = (,) <$> leftStateMachine m2s <*> rightStateMachine inpData
+  fullStateMachine (s2m,inpData) = do
+    right <- rightStateMachine inpData
+    left <- leftStateMachine s2m
+    pure (left, right)
 
-  leftStateMachine m2s
-    | busCycle m2s && addr m2s == respondAddress && not (writeEnable m2s) = popOutput
-    | busCycle m2s = pure ((wishboneS2M bytes) { acknowledge = True })
-    | otherwise = pure (wishboneS2M bytes)
-
-  rightStateMachine NoData = pure (Ack False)
-  rightStateMachine inpData@(Data _) = do
+  leftStateMachine NoData = pure (Ack False)
+  leftStateMachine inpData@(Data _) = do
     buf <- get
     if (E.last buf /= NoData) then pure (Ack False) else do
       put (inpData +>> buf)
       pure (Ack True)
 
-  popOutput = do
-    buf <- get
-    case (E.head buf) of
-      NoData -> pure ((wishboneS2M bytes) { stall = True })
-      (Data toSend) -> do
-        put (buf <<+ NoData)
-        pure ((wishboneS2M bytes) { acknowledge = True, readData = toSend })
+  rightStateMachine s2m = do
+    when (acknowledge s2m) (modify (<<+ NoData))
+    toSend <- gets E.head
+    pure $ case toSend of
+      NoData -> wishboneM2S bytes addressWidth
+      (Data toSend') -> (wishboneM2S bytes addressWidth) { writeData = toSend', addr = respondAddress, busCycle = True, writeEnable = True }
