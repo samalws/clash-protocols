@@ -12,8 +12,7 @@ import           Protocols.Internal
 import           Protocols.Df (Data, Data(..))
 
 import qualified Clash.Explicit.Prelude as E
-import Control.Arrow (first, second)
-import Control.Monad.State (gets, modify, put, runState)
+import Control.Monad.State (get, gets, modify, put, runState)
 import Control.Monad (when)
 
 -- | Data communicated from a Wishbone Master to a Wishbone Slave
@@ -135,27 +134,22 @@ wishboneSource bytes respondAddress fifoDepth = mealy machineAsFunction s0 where
 
   machineAsFunction s i = (s',o) where (o,s') = runState (fullStateMachine i) s
 
-  s0 = (NoData, E.replicate fifoDepth NoData)
+  s0 = E.replicate fifoDepth NoData
 
-  fullStateMachine (m2s, ack) = (,) <$> leftStateMachine m2s <*> rightStateMachine ack
+  fullStateMachine (m2s, (Ack ack)) = do
+    when ack $ modify (<<+ NoData)
+    leftOtp <- leftStateMachine m2s
+    rightOtp <- gets E.head
+    pure (leftOtp, rightOtp)
 
   leftStateMachine m2s
     | addr m2s == respondAddress && busCycle m2s && writeEnable m2s = pushInput (writeData m2s)
     | busCycle m2s = pure ((wishboneS2M bytes) { acknowledge = True })
     | otherwise = pure (wishboneS2M bytes)
 
-  rightStateMachine (Ack ack) = do
-    when ack $ modify $ first $ const NoData
-    noDataPresent <- gets ((== NoData) . fst)
-    when noDataPresent (popOutput fifoDepth)
-    gets fst
-
   pushInput inpData = do
-    buf <- gets snd
+    buf <- get
     if (E.last buf /= NoData) then pure ((wishboneS2M bytes) { stall = True }) else do
-      modify $ second $ const (Data inpData +>> buf)
+      put (Data inpData +>> buf)
       pure ((wishboneS2M bytes) { acknowledge = True })
 
-  popOutput _ = do -- TODO it's really stupid that the typechecker needs this blank param
-    buf <- gets snd
-    put (E.head buf, buf <<+ NoData)
