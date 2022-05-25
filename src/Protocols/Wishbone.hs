@@ -5,7 +5,7 @@
 
 module Protocols.Wishbone where
 
-import           Clash.Prelude hiding ((&&))
+import           Clash.Prelude hiding ((&&), not)
 
 import           Protocols.Internal
 
@@ -143,7 +143,7 @@ wishboneSource bytes respondAddress fifoDepth = mealy machineAsFunction s0 where
     pure (leftOtp, rightOtp)
 
   leftStateMachine m2s
-    | addr m2s == respondAddress && busCycle m2s && writeEnable m2s = pushInput (writeData m2s)
+    | busCycle m2s && addr m2s == respondAddress && writeEnable m2s = pushInput (writeData m2s)
     | busCycle m2s = pure ((wishboneS2M bytes) { acknowledge = True })
     | otherwise = pure (wishboneS2M bytes)
 
@@ -153,3 +153,52 @@ wishboneSource bytes respondAddress fifoDepth = mealy machineAsFunction s0 where
       put (Data inpData +>> buf)
       pure ((wishboneS2M bytes) { acknowledge = True })
 
+-- | Wishbone to Df sink
+--
+-- * Reading from the given address, pops an item from the fifo
+-- * Writes are acknowledged, but ignored
+-- * Reads from any other address are acknowledged, but the fifo element is not popped.
+-- * Asserts stall when the FIFO is empty
+wishboneSink ::
+  (1 + n) ~ depth =>
+  HiddenClockResetEnable dom =>
+  KnownNat bytes =>
+  KnownNat addressWidth =>
+  KnownNat depth =>
+  -- | Bytes of data
+  SNat bytes ->
+  -- | Address to respond to
+  BitVector addressWidth ->
+  -- | Depth of the FIFO
+  SNat depth ->
+  -- |
+  Signal dom (WishboneM2S bytes addressWidth, Data (BitVector (8 * bytes))) ->
+  -- |
+  Signal dom (WishboneS2M bytes, Ack)
+wishboneSink bytes respondAddress fifoDepth = mealy machineAsFunction s0 where
+
+  machineAsFunction s i = (s',o) where (o,s') = runState (fullStateMachine i) s
+
+  s0 = E.replicate fifoDepth NoData
+
+  fullStateMachine (m2s,inpData) = (,) <$> leftStateMachine m2s <*> rightStateMachine inpData
+
+  leftStateMachine m2s
+    | busCycle m2s && addr m2s == respondAddress && not (writeEnable m2s) = popOutput
+    | busCycle m2s = pure ((wishboneS2M bytes) { acknowledge = True })
+    | otherwise = pure (wishboneS2M bytes)
+
+  rightStateMachine NoData = pure (Ack False)
+  rightStateMachine inpData@(Data _) = do
+    buf <- get
+    if (E.last buf /= NoData) then pure (Ack False) else do
+      put (inpData +>> buf)
+      pure (Ack True)
+
+  popOutput = do
+    buf <- get
+    case (E.head buf) of
+      NoData -> pure ((wishboneS2M bytes) { stall = True })
+      (Data toSend) -> do
+        put (buf <<+ NoData)
+        pure ((wishboneS2M bytes) { acknowledge = True, readData = toSend })
