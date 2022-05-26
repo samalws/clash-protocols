@@ -266,14 +266,17 @@ wishboneSource ::
   KnownDomain dom =>
   KnownNat addressWidth =>
   KnownNat depth =>
+  KnownNat (BitSize dat) =>
   NFDataX dat =>
   -- | Address to respond to
   BitVector addressWidth ->
   -- | Depth of the FIFO
   SNat depth ->
   -- |
-  Circuit (Wishbone dom 'Standard {- TODO -} addressWidth dat) (Df dom dat)
-wishboneSource respondAddress fifoDepth = Circuit (unbundle . E.mealy clockGen resetGen enableGen machineAsFunction s0 . bundle) where
+  Circuit (Wishbone dom mode addressWidth dat) (Df dom dat)
+wishboneSource respondAddress fifoDepth = Circuit (unbundle . addClkRstEn (mealy machineAsFunction s0 . register (wishboneM2S, Ack False)) . bundle) where
+
+  addClkRstEn = withClockResetEnable clockGen resetGen enableGen
 
   machineAsFunction s i = (s',o) where (o,s') = runState (fullStateMachine i) s
 
@@ -286,8 +289,8 @@ wishboneSource respondAddress fifoDepth = Circuit (unbundle . E.mealy clockGen r
     pure (leftOtp, rightOtp)
 
   leftStateMachine m2s
-    | busCycle m2s && addr m2s == respondAddress && writeEnable m2s = pushInput (writeData m2s)
-    | busCycle m2s = pure (wishboneS2M { acknowledge = True })
+    | strobe m2s && addr m2s == respondAddress && writeEnable m2s = pushInput (writeData m2s)
+    | strobe m2s = pure (wishboneS2M { acknowledge = True })
     | otherwise = pure wishboneS2M
 
   pushInput inpData = do
@@ -317,17 +320,20 @@ wishboneSink ::
   -- | Depth of the FIFO
   SNat depth ->
   -- |
-  Circuit (Df dom dat) (Wishbone dom 'Standard {- TODO -} addressWidth dat)
-wishboneSink respondAddress fifoDepth = Circuit (unbundle . E.mealy clockGen resetGen enableGen machineAsFunction s0 . bundle) where
+  Circuit (Df dom dat) (Wishbone dom mode addressWidth dat)
+wishboneSink respondAddress fifoDepth = Circuit (unbundle . addClkRstEn (mealy machineAsFunction s0 . register (NoData, wishboneS2M)) . bundle) where
+
+  addClkRstEn = withClockResetEnable clockGen resetGen enableGen
 
   machineAsFunction s i = (s',o) where (o,s') = runState (fullStateMachine i) s
 
   s0 = E.replicate fifoDepth NoData
 
   fullStateMachine (inpData, s2m) = do
-    right <- rightStateMachine s2m
-    left <- leftStateMachine inpData
-    pure (left, right)
+    when (acknowledge s2m) $ modify (<<+ NoData)
+    leftOtp <- leftStateMachine inpData
+    rightOtp <- genRightOtp <$> gets E.head
+    pure (leftOtp, rightOtp)
 
   leftStateMachine NoData = pure (Ack False)
   leftStateMachine inpData@(Data _) = do
@@ -338,9 +344,6 @@ wishboneSink respondAddress fifoDepth = Circuit (unbundle . E.mealy clockGen res
         pure (Ack True)
       _ -> pure (Ack False)
 
-  rightStateMachine s2m = do
-    when (acknowledge s2m) (modify (<<+ NoData))
-    toSend <- gets E.head
-    pure $ case toSend of
-      NoData -> wishboneM2S
-      (Data toSend') -> wishboneM2S { writeData = toSend', addr = respondAddress, busCycle = True, writeEnable = True }
+  genRightOtp = \case
+    NoData -> wishboneM2S
+    (Data toSend) -> wishboneM2S { writeData = toSend, busSelect = maxBound, addr = respondAddress, busCycle = True, strobe = True, writeEnable = True }
