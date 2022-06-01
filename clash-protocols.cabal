@@ -86,6 +86,8 @@ common common-options
     base >= 4.14.0.0,
     Cabal,
 
+    mtl,
+
     -- clash-prelude will set suitable version bounds for the plugins
     clash-prelude >= 1.4.0 && < 1.8,
     ghc-typelits-natnormalise,
@@ -146,6 +148,7 @@ library
     Protocols.Axi4.WriteAddress
     Protocols.Axi4.WriteData
     Protocols.Axi4.WriteResponse
+    Protocols.Axi4.Fifo
 
     Protocols.Df
     Protocols.DfLike
