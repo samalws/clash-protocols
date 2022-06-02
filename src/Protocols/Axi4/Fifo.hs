@@ -73,14 +73,14 @@ axi4Source respondAddress fifoDepth = Circuit (hideReset circuitFunction) where
 
   machineAsFunction s i = (s',o) where (o,s') = runState (fullStateMachine i) s
 
-  s0 = (False, NoData, replicate fifoDepth NoData)
+  s0 = (NoData, replicate fifoDepth NoData)
 
   fullStateMachine (True,_,_,_) = pure (S2M_WriteAddress{_awready = False}, S2M_WriteData{_wready = False}, NoData)
   fullStateMachine (False,addrM2S,dataM2S,Ack ack) = do
     ackA <- processAddress addrM2S
     ackB <- pushInpData dataM2S
     sendData
-    (_, dataOut, _) <- get
+    (dataOut, _) <- get
     clearData ack
     pure (ackA, ackB, dataOut)
 
@@ -137,35 +137,30 @@ axi4Sink respondAddress fifoDepth = Circuit (hideReset circuitFunction) where
 
   machineAsFunction s i = (s',o) where (o,s') = runState (fullStateMachine i) s
 
-  s0 = (False, S2M_NoReadData, replicate fifoDepth NoData)
+  s0 = (S2M_NoReadData, replicate fifoDepth NoData)
 
   fullStateMachine (True,_,_,_) = pure (Ack False, S2M_ReadAddress{_arready = False}, S2M_NoReadData{})
   fullStateMachine (False,inpDat,addrM2S,dataM2S) = do
     ackA <- pushInpData inpDat
-    ackB <- processAddress addrM2S
-    sendData
-    (_, dataS2M, _) <- get
+    ackB <- sendData addrM2S
+    (dataS2M, _) <- get
     clearData dataM2S
     pure (ackA, ackB, dataS2M)
 
   pushInpData NoData = pure (Ack False)
   pushInpData inpDat@(Data _) = do
-    (a,b,buf) <- get
-    put (a,b,inpDat +>> buf)
+    (a,buf) <- get
+    put (a,inpDat +>> buf)
     pure (Ack True)
 
-  processAddress M2S_NoReadAddress = pure (S2M_ReadAddress{_arready = False})
-  processAddress addrM2S = do
-    (_,b,c) <- get
-    put (_araddr addrM2S == respondAddress, b, c)
+  sendData M2S_NoReadAddress = pure (S2M_ReadAddress{_arready = False})
+  sendData addrM2S = do
+    (currOtp,buf) <- get
+    case (_araddr addrM2S == respondAddress, currOtp, E.head buf) of
+      (True, S2M_NoReadData, Data toSend) -> put (S2M_ReadData { _rid = 0, _rdata = toSend, _rresp = (), _rlast = True, _ruser = () }, buf <<+ NoData)
+      _ -> pure ()
     pure (S2M_ReadAddress{_arready = True})
 
-  sendData = do
-    (shouldSend,currOtp,buf) <- get
-    case (shouldSend, currOtp, E.head buf) of
-      (True, S2M_NoReadData, Data toSend) -> put (False, S2M_ReadData { _rid = 0, _rdata = toSend, _rresp = (), _rlast = True, _ruser = () }, buf <<+ NoData)
-      _ -> pure ()
-
   clearData dataM2S = when (_rready dataM2S) $ do
-    (_,_,c) <- get
-    put (False, S2M_NoReadData, c)
+    (_,b) <- get
+    put (S2M_NoReadData, b)
