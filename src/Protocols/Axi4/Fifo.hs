@@ -1,10 +1,10 @@
 {-# LANGUAGE FlexibleContexts #-}
 
-module Protocols.Axi4.Fifo where
+module Protocols.Axi4.Fifo (axi4Source, axi4Sink) where
 
 import Clash.Prelude hiding (pure, not, (||), (&&))
 import Control.Monad.State
-import Prelude hiding (replicate)
+import Prelude hiding (replicate, repeat, foldl)
 import Protocols.Axi4.Common hiding (Data)
 import Protocols.Axi4.ReadAddress
 import Protocols.Axi4.ReadData hiding (pure)
@@ -13,6 +13,17 @@ import Protocols.Axi4.WriteData
 import Protocols.Df hiding (pure)
 import Protocols.Internal
 
+
+-- move all the Just's to the right, and pad with zeros on the left
+accountForStrobe :: (KnownNat n, BitPack a) => Vec n (Maybe a) -> Vec n a
+accountForStrobe = foldl f s0 where
+  s0 = repeat (bitCoerce $ repeat False) -- Vec n of all zeros
+  f v (Just a) = v <<+ a
+  f v Nothing = v
+
+-- we have Index (depth+1) but we only want to access blockram up to depth-1
+incIdxLooping :: (KnownNat n) => Index n -> Index n
+incIdxLooping idx = if idx >= (maxBound-1) then 0 else idx+1
 
 -- | Axi4 to Df source
 -- * Writing to the given address pushes an item onto the fifo
@@ -49,11 +60,10 @@ axi4Source ::
   -- |
   Circuit
     (Axi4WriteAddress dom 'KeepBurst waKeepSize w_lw w_iw aw waKeepRegion waKeepBurstLength waKeepLock waKeepCache waKeepPermissions waKeepQos waUser,
-     Axi4WriteData dom 'NoStrobe wdBytes wdUser,
+     Axi4WriteData dom 'KeepStrobe wdBytes wdUser,
      Axi4ReadAddress dom 'KeepBurst 'NoSize r_lw r_iw aw raKeepRegion 'KeepBurstLength raKeepLock raKeepCache raKeepPermissions raKeepQos raUser,
      Reverse (Axi4ReadData dom 'KeepResponse r_iw rdUser (Index (depth+1))))
     (Df dom dat)
--- TODO look at strobe
 axi4Source respondAddress statusAddress fifoDepth rdUser = Circuit (hideReset circuitFunction) where
 
   -- implemented using a fixed-size array
@@ -117,7 +127,7 @@ axi4Source respondAddress statusAddress fifoDepth rdUser = Circuit (hideReset ci
     -- we only want to push if we're the recpient of the writes AND our buffer has space available
     if (not shouldRead || numFree == 0) then pure (Nothing, S2M_WriteData{_wready = not shouldRead}) else do
       put (False,b,c,d,e,numFree-1,g,incIdxLooping nextWrite)
-      pure (Just (nextWrite, unpack $ resize $ _wdata inpDat), S2M_WriteData{_wready = True})
+      pure (Just (nextWrite, unpack $ resize $ pack $ accountForStrobe $ _wdata inpDat), S2M_WriteData{_wready = True})
 
   -- if state is being asked for, log the burst length requested
   processReadAddress M2S_NoReadAddress = pure (S2M_ReadAddress { _arready = False })
@@ -143,9 +153,6 @@ axi4Source respondAddress statusAddress fifoDepth rdUser = Circuit (hideReset ci
   clearData ack = when ack $ do
     (a,b,c,d,_,f,g,h) <- get
     put (a, b, c, d, NoData, f, g, h)
-
-  -- we have Index (depth+1) but we only want to access blockram up to depth-1
-  incIdxLooping idx = if idx >= (maxBound-1) then 0 else idx+1
 
 -- | Axi4 to Df sink
 -- * Reading from the given address pops an item from the fifo and returns Right
@@ -272,6 +279,3 @@ axi4Sink respondAddress statusAddress fifoDepth rdUserRead rdUserStatus rdUserEr
     if numFree == 0 then pure (Nothing, Ack False) else do
       put (a,b,c,numFree-1,e,incIdxLooping nextWrite)
       pure (Just (nextWrite, inpDat), Ack True)
-
-  -- we have Index (depth+1) but we only want to access blockram up to depth-1
-  incIdxLooping idx = if idx >= (maxBound-1) then 0 else idx+1
