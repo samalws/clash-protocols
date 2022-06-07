@@ -18,6 +18,7 @@ import Protocols.Internal
 -- * Writing to the given address pushes an item onto the fifo
 -- * Writes are only acknowledged once there is free space in the fifo
 -- * Reading from statusAddress returns how much free space is left in the buffer
+-- * Doesn't accept a new read request before the old one is done
 -- * Reading/writing to any other address is acknowledged, but the fifo element is not popped and nothing is replied
 -- * Only responds to BmFixed burst mode, other modes are acknowledged but nothing happens
 -- * Respects burst length, will respond with the correct number of replies
@@ -28,9 +29,12 @@ axi4Source ::
   (depth+1) ~ (1+depth) =>
   HiddenClockResetEnable dom =>
   KnownNat depth =>
-  KnownNat (BitSize dat) =>
   KnownNat (Width aw) =>
-  KnownNat (Width iw) =>
+  KnownNat (Width w_iw) =>
+  KnownNat (Width r_iw) =>
+  KnownNat (BitSize dat) =>
+  KnownNat wdBytes =>
+  (BitSize dat) <= (wdBytes * 8) => -- not necessary for it to typecheck but necessary for it to work correctly
   NFDataX dat =>
   BitPack dat =>
   NFDataX rdUser =>
@@ -44,13 +48,12 @@ axi4Source ::
   rdUser ->
   -- |
   Circuit
-    (Axi4WriteAddress dom 'KeepBurst waKeepSize lw iw aw waKeepRegion waKeepBurstLength waKeepLock waKeepCache waKeepPermissions waKeepQos waUser,
-     Axi4WriteData dom 'NoStrobe ((BitSize dat + 7) `Div` 8) wdUser,
-     Axi4ReadAddress dom 'KeepBurst raKeepSize lw iw aw raKeepRegion 'KeepBurstLength raKeepLock raKeepCache raKeepPermissions raKeepQos raUser,
-     Reverse (Axi4ReadData dom 'KeepResponse iw rdUser (Index (depth+1))))
+    (Axi4WriteAddress dom 'KeepBurst waKeepSize w_lw w_iw aw waKeepRegion waKeepBurstLength waKeepLock waKeepCache waKeepPermissions waKeepQos waUser,
+     Axi4WriteData dom 'NoStrobe wdBytes wdUser,
+     Axi4ReadAddress dom 'KeepBurst 'NoSize r_lw r_iw aw raKeepRegion 'KeepBurstLength raKeepLock raKeepCache raKeepPermissions raKeepQos raUser,
+     Reverse (Axi4ReadData dom 'KeepResponse r_iw rdUser (Index (depth+1))))
     (Df dom dat)
 -- TODO look at strobe
--- TODO for keepSize, verify the size
 axi4Source respondAddress statusAddress fifoDepth rdUser = Circuit (hideReset circuitFunction) where
 
   -- implemented using a fixed-size array
@@ -66,7 +69,7 @@ axi4Source respondAddress statusAddress fifoDepth rdUser = Circuit (hideReset ci
   machineAsFunction s i = (s',o) where (o,s') = runState (fullStateMachine i) s
 
   -- initial state
-  -- (last write address given was respondAddress, number of times left to send status output, status output, data output, amount of space left, next place to read from, next place to write to)
+  -- (last write address given was respondAddress, number of times left to send status output, status output read id, status output, data output, amount of space left, next place to read from, next place to write to)
   s0 = let numFree = maxBound
            nextRW = numFree * 0
            -- extremely janky, but necessary for type checking;
@@ -74,72 +77,72 @@ axi4Source respondAddress statusAddress fifoDepth rdUser = Circuit (hideReset ci
            --   (since ghc wouldn't be able to tell their type otherwise)
            -- nextRW is initialized to 0, although it could take on any value and the buffer would still work
        in
-           (False, 0, S2M_NoReadData, NoData, numFree, nextRW, nextRW)
+           (False, 0, 0, S2M_NoReadData, NoData, numFree, nextRW, nextRW)
 
   -- when reset is on, output blank/default and don't change any state
   fullStateMachine (_,True,_,_,_,_,_) = pure (0, Nothing, S2M_WriteAddress{_awready = False}, S2M_WriteData{_wready = False}, S2M_ReadAddress{_arready = False}, S2M_NoReadData, NoData)
   fullStateMachine (brRead,False,addrM2S,dataM2S,statusAddrM2S,statusAckM2S,Ack ack) = do
     sendData brRead
     -- fix some outputs before they get changed for next time later on
-    (_, _, _, dataOut, _, brReadAddr, _) <- get
+    (_, _, _, _, dataOut, _, brReadAddr, _) <- get
     ackA <- processWriteAddress addrM2S
     (brWrite, ackB) <- pushInpData dataM2S
     ackC <- processReadAddress statusAddrM2S
     sendStatus
-    (_, _, statusOut, _, _, _, _) <- get
+    (_, _, _, statusOut, _, _, _, _) <- get
     clearStatus statusAckM2S
     clearData ack
     pure (brReadAddr, brWrite, ackA, ackB, ackC, statusOut, dataOut)
 
   -- decide which data to send, given block ram read value
   sendData brRead = do
-    (a,b,c,currOtp,numFree,nextRead,g) <- get
+    (a,b,c,d,currOtp,numFree,nextRead,h) <- get
     case (currOtp,numFree == maxBound) of
-      (NoData, False) -> put (a, b, c, Data brRead, numFree+1, incIdxLooping nextRead, g) -- pop
+      (NoData, False) -> put (a, b, c, d, Data brRead, numFree+1, incIdxLooping nextRead, h) -- pop
       _ -> pure ()
 
   -- log whether we're the target of the next data write; return ack
   processWriteAddress M2S_NoWriteAddress = pure (S2M_WriteAddress{_awready = False})
   processWriteAddress addrM2S | _awburst addrM2S /= BmFixed = pure (S2M_WriteAddress{_awready = True})
   processWriteAddress addrM2S = do
-    (_,b,c,d,e,f,g) <- get
-    put (_awaddr addrM2S == respondAddress, b, c, d, e, f, g)
+    (_,b,c,d,e,f,g,h) <- get
+    put (_awaddr addrM2S == respondAddress, b, c, d, e, f, g, h)
     pure (S2M_WriteAddress{_awready = True})
 
   -- push input data onto the stack
   pushInpData M2S_NoWriteData = pure (Nothing, S2M_WriteData{_wready = False})
   pushInpData inpDat = do
-    (shouldRead,b,c,d,numFree,f,nextWrite) <- get
+    (shouldRead,b,c,d,e,numFree,g,nextWrite) <- get
     -- we only want to output _wready = false if we're the recpient of the writes AND our buffer is full
     -- we only want to push if we're the recpient of the writes AND our buffer has space available
     if (not shouldRead || numFree == 0) then pure (Nothing, S2M_WriteData{_wready = not shouldRead}) else do
-      put (False,b,c,d,numFree-1,f,incIdxLooping nextWrite)
+      put (False,b,c,d,e,numFree-1,g,incIdxLooping nextWrite)
       pure (Just (nextWrite, unpack $ resize $ _wdata inpDat), S2M_WriteData{_wready = True})
 
   -- if state is being asked for, log the burst length requested
   processReadAddress M2S_NoReadAddress = pure (S2M_ReadAddress { _arready = False })
   processReadAddress addrM2S | _arburst addrM2S /= BmFixed = pure (S2M_ReadAddress{ _arready = True })
   processReadAddress addrM2S = do
-    (a,burstLenLeft,c,d,e,f,g) <- get
-    when (Just (_araddr addrM2S) == statusAddress) $ put (a,burstLenLeft+(_arlen addrM2S),c,d,e,f,g)
-    pure (S2M_ReadAddress { _arready = True })
+    (a,burstLenLeft,_,d,e,f,g,h) <- get
+    when (Just (_araddr addrM2S) == statusAddress && burstLenLeft == 0) $ put (a,_arlen addrM2S,_arid addrM2S,d,e,f,g,h)
+    pure (S2M_ReadAddress { _arready = burstLenLeft /= 0 })
 
   -- write down what status message we're sending (so it doesn't change between clock cycles)
   sendStatus = do
-    (a,burstLenLeft,statusOut,d,numFree,f,g) <- get
+    (a,burstLenLeft,rid,statusOut,e,numFree,g,h) <- get
     -- case (our status is requested, we aren't already giving it) of
     case (burstLenLeft == 0, statusOut) of
-      (False, S2M_NoReadData) -> put (a,burstLenLeft-1,S2M_ReadData { _rdata = numFree, _rid = 0, _rresp = ROkay, _rlast = burstLenLeft == 1, _ruser = rdUser },d,numFree,f,g)
+      (False, S2M_NoReadData) -> put (a,burstLenLeft-1,rid,S2M_ReadData { _rdata = numFree, _rid = rid, _rresp = ROkay, _rlast = burstLenLeft == 1, _ruser = rdUser },e,numFree,g,h)
       _ -> pure ()
 
   -- when we're acknowledged, clear our output for next clock cycle (it stays the same this cycle)
   clearStatus ack = when (_rready ack) $ do
-    (a,b,_,d,e,f,g) <- get
-    put (a, b, S2M_NoReadData, d, e, f, g)
+    (a,b,c,_,e,f,g,h) <- get
+    put (a, b, c, S2M_NoReadData, e, f, g, h)
 
   clearData ack = when ack $ do
-    (a,b,c,_,e,f,g) <- get
-    put (a, b, c, NoData, e, f, g)
+    (a,b,c,d,_,f,g,h) <- get
+    put (a, b, c, d, NoData, f, g, h)
 
   -- we have Index (depth+1) but we only want to access blockram up to depth-1
   incIdxLooping idx = if idx >= (maxBound-1) then 0 else idx+1
@@ -147,6 +150,7 @@ axi4Source respondAddress statusAddress fifoDepth rdUser = Circuit (hideReset ci
 -- | Axi4 to Df sink
 -- * Reading from the given address pops an item from the fifo and returns Right
 -- * Reading from statusAddress returns Left, and how much free space is left in the buffer
+-- * Doesn't accept a new read request before the old one is done
 -- * Reading from any other address is acknowledged, but the fifo element is not popped and nothing is replied
 -- * When reading from an empty fifo, will respond with error and Left 0
 -- * Only responds to BmFixed burst mode, other modes are acknowledged but nothing happens
@@ -177,7 +181,6 @@ axi4Sink ::
     (Df dom dat)
     (Reverse (Axi4ReadAddress dom 'KeepBurst 'NoSize lw iw aw keepRegion 'KeepBurstLength keepLock keepCache keepPermissions keepQos raData),
      Axi4ReadData dom 'KeepResponse iw rdUser (Either (Index (depth+1)) dat))
--- TODO for keepSize, verify the size
 axi4Sink respondAddress statusAddress fifoDepth rdUserRead rdUserStatus rdUserErr = Circuit (hideReset circuitFunction) where
 
   -- implemented using a fixed-size array
@@ -193,7 +196,7 @@ axi4Sink respondAddress statusAddress fifoDepth rdUserRead rdUserStatus rdUserEr
   machineAsFunction s i = (s',o) where (o,s') = runState (fullStateMachine i) s
 
   -- initial state
-  -- (amount left in read burst, axi read data (amt left or data), amount of space left, next place to read from, next place to write to, fifo)
+  -- (amount left in read burst, read ID, axi read data (amt left or data), amount of space left, next place to read from, next place to write to, fifo)
   s0 = let numFree = maxBound
            nextRW = numFree * 0
            -- extremely janky, but necessary for type checking;
@@ -201,7 +204,7 @@ axi4Sink respondAddress statusAddress fifoDepth rdUserRead rdUserStatus rdUserEr
            --   (since ghc wouldn't be able to tell their type otherwise)
            -- nextRW is initialized to 0, although it could take on any value and the buffer would still work
        in
-           (Left 0, S2M_NoReadData, numFree, nextRW, nextRW)
+           (Left 0, 0, S2M_NoReadData, numFree, nextRW, nextRW)
 
   -- when reset is on, output blank/default and don't change any state
   fullStateMachine (_,True,_,_,_) = pure (0, Nothing, Ack False, S2M_ReadAddress{_arready = False}, S2M_NoReadData{})
@@ -209,21 +212,19 @@ axi4Sink respondAddress statusAddress fifoDepth rdUserRead rdUserStatus rdUserEr
     ackB <- processAddr addrM2S
     sendData brRead
     -- fix some outputs before they get changed for next time later on
-    (_, dataS2M, _, brReadAddr, _) <- get
+    (_, _, dataS2M, _, brReadAddr, _) <- get
     clearData dataM2S
     (brWrite, ackA) <- pushInpData inpDat
     pure (brReadAddr, brWrite, ackA, ackB, dataS2M)
 
   -- log whether our status/fifo elements are being asked for; return ack
   processAddr M2S_NoReadAddress = pure (S2M_ReadAddress{_arready = False})
-  processAddr addrM2S | _arburst addrM2S /= BmFixed = do
-    (_,b,c,d,e) <- get
-    put (Left 0, b, c, d, e)
-    pure (S2M_ReadAddress{_arready = True})
+  processAddr addrM2S | _arburst addrM2S /= BmFixed = pure (S2M_ReadAddress{_arready = True})
   processAddr addrM2S = do
-    (_,b,c,d,e) <- get
-    put (pureProcessAddr (_araddr addrM2S) (_arlen addrM2S), b, c, d, e)
-    pure (S2M_ReadAddress{_arready = True})
+    (burstLenLeft,_,c,d,e,f) <- get
+    let canAccept = burstLenLeft == Left 0 || burstLenLeft == Right 0
+    when canAccept $ put (pureProcessAddr (_araddr addrM2S) (_arlen addrM2S), _arid addrM2S, c, d, e, f)
+    pure (S2M_ReadAddress{_arready = canAccept})
 
   pureProcessAddr addr n | addr == respondAddress = Right n
   pureProcessAddr addr n | Just addr == statusAddress = Left n
@@ -231,42 +232,45 @@ axi4Sink respondAddress statusAddress fifoDepth rdUserRead rdUserStatus rdUserEr
 
   -- decide which data to send, given block ram read value
   sendData brRead = do
-    (burstLenLeft,currOtp,numFree,nextRead,e) <- get
+    (burstLenLeft,rid,currOtp,numFree,nextRead,f) <- get
     -- case (do we want status or fifo element?, are we outputting anything currently?, do we have anything in our buffer?) of
     case (burstLenLeft, currOtp, numFree == maxBound) of
       (Left 0, _, _) -> pure ()
       (Right 0, _, _) -> pure ()
       (Left n, S2M_NoReadData, _) ->
         put (Left (n-1),
-             S2M_ReadData { _rid = 0, _rdata = Left numFree, _rresp = ROkay, _rlast = n == 1, _ruser = rdUserStatus },
+             rid,
+             S2M_ReadData { _rid = rid, _rdata = Left numFree, _rresp = ROkay, _rlast = n == 1, _ruser = rdUserStatus },
              numFree,
              nextRead,
-             e)
+             f)
       (Right n, S2M_NoReadData, False) ->
         put (Right (n-1),
-             S2M_ReadData { _rid = 0, _rdata = Right brRead, _rresp = ROkay, _rlast = n == 1, _ruser = rdUserRead },
+             rid,
+             S2M_ReadData { _rid = rid, _rdata = Right brRead, _rresp = ROkay, _rlast = n == 1, _ruser = rdUserRead },
              numFree+1,
              incIdxLooping nextRead,
-             e)
+             f)
       (Right n, S2M_NoReadData, True) ->
         put (Right (n-1),
-             S2M_ReadData { _rid = 0, _rdata = Left numFree, _rresp = RSlaveError, _rlast = n == 1, _ruser = rdUserErr },
+             rid,
+             S2M_ReadData { _rid = rid, _rdata = Left numFree, _rresp = RSlaveError, _rlast = n == 1, _ruser = rdUserErr },
              numFree,
              nextRead,
-             e)
+             f)
       _ -> pure ()
 
   -- when we're acknowledged, clear our output for next clock cycle (it stays the same this cycle)
   clearData dataM2S = when (_rready dataM2S) $ do
-    (a,_,c,d,e) <- get
-    put (a,S2M_NoReadData,c,d,e)
+    (a,b,_,d,e,f) <- get
+    put (a,b,S2M_NoReadData,d,e,f)
 
   -- push input data onto the stack
   pushInpData NoData = pure (Nothing, Ack False)
   pushInpData (Data inpDat) = do
-    (a,b,numFree,d,nextWrite) <- get
+    (a,b,c,numFree,e,nextWrite) <- get
     if numFree == 0 then pure (Nothing, Ack False) else do
-      put (a,b,numFree-1,d,incIdxLooping nextWrite)
+      put (a,b,c,numFree-1,e,incIdxLooping nextWrite)
       pure (Just (nextWrite, inpDat), Ack True)
 
   -- we have Index (depth+1) but we only want to access blockram up to depth-1
