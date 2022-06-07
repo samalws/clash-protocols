@@ -183,6 +183,10 @@ instance Protocol (a, b, c, d) where
   type Fwd (a, b, c, d) = (Fwd a, Fwd b, Fwd c, Fwd d)
   type Bwd (a, b, c, d) = (Bwd a, Bwd b, Bwd c, Bwd d)
 
+instance Protocol (a, b, c, d, e) where
+  type Fwd (a, b, c, d, e) = (Fwd a, Fwd b, Fwd c, Fwd d, Fwd e)
+  type Bwd (a, b, c, d, e) = (Bwd a, Bwd b, Bwd c, Bwd d, Bwd e)
+
 instance C.KnownNat n => Protocol (C.Vec n a) where
   type Fwd (C.Vec n a) = C.Vec n (Fwd a)
   type Bwd (C.Vec n a) = C.Vec n (Bwd a)
