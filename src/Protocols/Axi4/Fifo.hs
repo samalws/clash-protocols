@@ -5,6 +5,7 @@ module Protocols.Axi4.Fifo (axi4Source, axi4Sink) where
 import Clash.Prelude hiding (pure, not, (||), (&&))
 import Control.Monad.State
 import Data.Maybe (fromJust, isNothing)
+import Data.Proxy (Proxy)
 import Prelude hiding (replicate, repeat, foldl)
 import Protocols.Axi4.Common hiding (Data)
 import Protocols.Axi4.ReadAddress
@@ -12,7 +13,7 @@ import Protocols.Axi4.ReadData hiding (pure)
 import Protocols.Axi4.WriteAddress
 import Protocols.Axi4.WriteData
 import Protocols.Axi4.WriteResponse
-import Protocols.Df hiding (pure)
+import Protocols.DfLike hiding (pure)
 import Protocols.Internal
 
 
@@ -52,6 +53,15 @@ axi4Source ::
   BitPack dat =>
   NFDataX wrUser =>
   NFDataX rdUser =>
+  DfLike dom df dat =>
+  DfLike dom df () =>
+  NFDataX (Data df dat) =>
+  -- | A proxy to our dfLike type
+  Proxy (df dat) ->
+  -- | A proxy to our dfLike with blank data
+  Proxy (df ()) ->
+  -- | Blank payload in our dfLike type
+  Data df () ->
   -- | Address to respond to
   BitVector (Width aw) ->
   -- | Address to ask for status (how much fixed space is left in the buffer)
@@ -69,8 +79,8 @@ axi4Source ::
      Reverse (Axi4WriteResponse dom 'KeepResponse w_iw wrUser),
      Axi4ReadAddress dom 'KeepBurst 'NoSize r_lw r_iw aw raKeepRegion 'KeepBurstLength raKeepLock raKeepCache raKeepPermissions raKeepQos raUser,
      Reverse (Axi4ReadData dom 'KeepResponse r_iw rdUser (Index (depth+1))))
-    (Df dom dat)
-axi4Source respondAddress statusAddress fifoDepth wrUser rdUser = Circuit (hideReset circuitFunction) where
+    (df dat)
+axi4Source dfProxy blankDfProxy blankPayload respondAddress statusAddress fifoDepth wrUser rdUser = Circuit (hideReset circuitFunction) where
 
   -- implemented using a fixed-size array
   --   write location and read location are both stored
@@ -93,11 +103,11 @@ axi4Source respondAddress statusAddress fifoDepth wrUser rdUser = Circuit (hideR
            --   (since ghc wouldn't be able to tell their type otherwise)
            -- nextRW is initialized to 0, although it could take on any value and the buffer would still work
        in
-           (Nothing, S2M_NoWriteResponse, 0, 0, S2M_NoReadData, NoData, numFree, nextRW, nextRW)
+           (Nothing, S2M_NoWriteResponse, 0, 0, S2M_NoReadData, noData dfProxy, numFree, nextRW, nextRW)
 
   -- when reset is on, output blank/default and don't change any state
-  fullStateMachine (_,True,_,_,_,_,_,_) = pure (0, Nothing, S2M_WriteAddress{_awready = False}, S2M_WriteData{_wready = False}, S2M_NoWriteResponse, S2M_ReadAddress{_arready = False}, S2M_NoReadData, NoData)
-  fullStateMachine (brRead,False,addrM2S,dataM2S,respM2S,statusAddrM2S,statusAckM2S,Ack ack) = do
+  fullStateMachine (_,True,_,_,_,_,_,_) = pure (0, Nothing, S2M_WriteAddress{_awready = False}, S2M_WriteData{_wready = False}, S2M_NoWriteResponse, S2M_ReadAddress{_arready = False}, S2M_NoReadData, noData dfProxy)
+  fullStateMachine (brRead,False,addrM2S,dataM2S,respM2S,statusAddrM2S,statusAckM2S,ack) = do
     sendData brRead
     -- fix some outputs before they get changed for next time later on
     (_, respS2M, _, _, _, dataOut, _, brReadAddr, _) <- get
@@ -108,14 +118,14 @@ axi4Source respondAddress statusAddress fifoDepth wrUser rdUser = Circuit (hideR
     (_, _, _, _, statusOut, _, _, _, _) <- get
     clearResp respM2S
     clearStatus statusAckM2S
-    clearData ack
+    clearData $ ackToBool dfProxy ack
     pure (brReadAddr, brWrite, ackA, ackB, respS2M, ackC, statusOut, dataOut)
 
   -- decide which data to send, given block ram read value
   sendData brRead = do
     (a,b,c,d,e,currOtp,numFree,nextRead,i) <- get
-    case (currOtp,numFree == maxBound) of
-      (NoData, False) -> put (a, b, c, d, e, Data brRead, numFree+1, incIdxLooping nextRead, i) -- pop
+    case (getPayload dfProxy currOtp,numFree == maxBound) of
+      (Nothing, False) -> put (a, b, c, d, e, setPayload blankDfProxy dfProxy blankPayload (Just brRead), numFree+1, incIdxLooping nextRead, i) -- pop
       _ -> pure ()
 
   -- log whether we're the target of the next data write; return ack
@@ -165,7 +175,7 @@ axi4Source respondAddress statusAddress fifoDepth wrUser rdUser = Circuit (hideR
 
   clearData ack = when ack $ do
     (a,b,c,d,e,_,g,h,i) <- get
-    put (a, b, c, d, e, NoData, g, h, i)
+    put (a, b, c, d, e, noData dfProxy, g, h, i)
 
 -- | Axi4 to Df sink
 -- * Reading from the given address pops an item from the fifo and returns Right
@@ -188,6 +198,9 @@ axi4Sink ::
   KnownNat (Width iw) =>
   NFDataX dat =>
   NFDataX rdUser =>
+  DfLike dom df dat =>
+  -- | A proxy to our dfLike type
+  Proxy (df dat) ->
   -- | Address to respond to
   BitVector (Width aw) ->
   -- | Address to ask for status (how much space is left in buffer)
@@ -198,10 +211,10 @@ axi4Sink ::
   rdUser -> rdUser -> rdUser ->
   -- |
   Circuit
-    (Df dom dat)
+    (df dat)
     (Reverse (Axi4ReadAddress dom 'KeepBurst 'NoSize lw iw aw keepRegion 'KeepBurstLength keepLock keepCache keepPermissions keepQos raData),
      Axi4ReadData dom 'KeepResponse iw rdUser (Either (Index (depth+1)) dat))
-axi4Sink respondAddress statusAddress fifoDepth rdUserRead rdUserStatus rdUserErr = Circuit (hideReset circuitFunction) where
+axi4Sink dfProxy respondAddress statusAddress fifoDepth rdUserRead rdUserStatus rdUserErr = Circuit (hideReset circuitFunction) where
 
   -- implemented using a fixed-size array
   --   write location and read location are both stored
@@ -227,7 +240,7 @@ axi4Sink respondAddress statusAddress fifoDepth rdUserRead rdUserStatus rdUserEr
            (Left 0, 0, S2M_NoReadData, numFree, nextRW, nextRW)
 
   -- when reset is on, output blank/default and don't change any state
-  fullStateMachine (_,True,_,_,_) = pure (0, Nothing, Ack False, S2M_ReadAddress{_arready = False}, S2M_NoReadData{})
+  fullStateMachine (_,True,_,_,_) = pure (0, Nothing, boolToAck dfProxy False, S2M_ReadAddress{_arready = False}, S2M_NoReadData{})
   fullStateMachine (brRead,False,inpDat,addrM2S,dataM2S) = do
     ackB <- processAddr addrM2S
     sendData brRead
@@ -286,9 +299,10 @@ axi4Sink respondAddress statusAddress fifoDepth rdUserRead rdUserStatus rdUserEr
     put (a,b,S2M_NoReadData,d,e,f)
 
   -- push input data onto the stack
-  pushInpData NoData = pure (Nothing, Ack False)
-  pushInpData (Data inpDat) = do
-    (a,b,c,numFree,e,nextWrite) <- get
-    if numFree == 0 then pure (Nothing, Ack False) else do
-      put (a,b,c,numFree-1,e,incIdxLooping nextWrite)
-      pure (Just (nextWrite, inpDat), Ack True)
+  pushInpData d = case (getPayload dfProxy d) of
+    Nothing -> pure (Nothing, boolToAck dfProxy False)
+    (Just inpDat) -> do
+      (a,b,c,numFree,e,nextWrite) <- get
+      if numFree == 0 then pure (Nothing, boolToAck dfProxy False) else do
+        put (a,b,c,numFree-1,e,incIdxLooping nextWrite)
+        pure (Just (nextWrite, inpDat), boolToAck dfProxy True)
