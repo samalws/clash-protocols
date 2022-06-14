@@ -975,35 +975,25 @@ resetGen n = C.unsafeFromHighPolarity
   (C.fromList (replicate n True <> repeat False))
 
 -- | DfLike to DfLike fifo
--- * Reading from the given address pops an item from the fifo and returns Right
--- * Reading from statusAddress returns Left, and how much free space is left in the buffer
--- * Doesn't accept a new read request before the old one is done
--- * Reading from any other address is acknowledged, but the fifo element is not popped and nothing is replied
--- * When reading from an empty fifo, will respond with error and Left 0
--- * Only responds to BmFixed burst mode, other modes are acknowledged but nothing happens
--- * Respects burst length, will respond with the correct number of replies
--- * Can use the user channel on ReadData,
--- *   replying with one of three user-provided replies,
--- *   depending on what message is being sent (fifo item, fifo status, or error)
+-- * Can use two different dfLike protocols on the left and right sides
+-- * Will only Ack incoming data when there is space available
 -- * Uses blockram to store data
 dfLikeFifo ::
-  (1 + n) ~ depth => -- TODO do we need all these constraints
   C.HiddenClockResetEnable dom =>
   CE.KnownNat depth =>
-  CE.KnownNat (CE.BitSize dat) =>
   CE.NFDataX dat =>
   CE.NFDataX (Data dfB dat) =>
   CE.NFDataX (Payload dat) =>
   DfLike dom dfA dat =>
   DfLike dom dfB dat =>
   DfLike dom dfB () =>
-  -- | A proxy to our dfLike type
+  -- | A proxy to our first dfLike type
   Proxy (dfA dat) ->
-  -- | A proxy to our dfLike type
+  -- | A proxy to our second dfLike type
   Proxy (dfB dat) ->
-  -- | A proxy to our dfLike type
+  -- | A proxy to our second dfLike type with blank data
   Proxy (dfB ()) ->
-  -- | TODO comment
+  -- | Blank payload in our second dfLike type
   Data dfB () ->
   -- | Depth of the fifo
   CE.SNat depth ->
@@ -1033,10 +1023,11 @@ dfLikeFifo dfAProxy dfBProxy blankDfBProxy blankPayload fifoDepth = Circuit (C.h
   fullStateMachine (brRead,False,inpDat,otpAck) = do
     rightStateMachine brRead
     -- fix some outputs before they get changed for next time later on
-    (rightOtp, _, brReadAddr, _) <- get
     (brWrite, inpAck) <- leftStateMachine inpDat
+    brWrite' <- fastTrackOutput brWrite
+    (rightOtp, _, brReadAddr, _) <- get
     when (ackToBool dfBProxy otpAck) $ modify removeDataOtp
-    P.pure (brReadAddr, brWrite, inpAck, rightOtp)
+    P.pure (brReadAddr, brWrite', inpAck, rightOtp)
 
   -- given dfA input, decide dfA output
   leftStateMachine d = case (getPayload dfAProxy d) of
@@ -1053,6 +1044,14 @@ dfLikeFifo dfAProxy dfBProxy blankDfBProxy blankPayload fifoDepth = Circuit (C.h
     case (getPayload dfBProxy currOtp, numFree == maxBound) of
       (Nothing, False) -> put (setPayload blankDfBProxy dfBProxy blankPayload (Just brRead), numFree+1, incIdxLooping nextRead, nextWrite)
       _ -> P.pure ()
+
+  -- if we're about to write, we can instead write nothing and output right away
+  fastTrackOutput Nothing = P.pure Nothing
+  fastTrackOutput o@(Just (_, dat)) = do
+    (currOtp, numFree, nextRead, nextWrite) <- get
+    case (getPayload dfBProxy currOtp) of
+      Nothing -> put (setPayload blankDfBProxy dfBProxy blankPayload (Just dat), numFree+1, incIdxLooping nextRead, nextWrite) >> P.pure Nothing
+      _ -> P.pure o
 
   removeDataOtp (_,b,c,d) = (noData dfBProxy,b,c,d)
 
