@@ -54,6 +54,9 @@ module Protocols.DfLike
 
     -- * Internals
   , forceResetSanity
+
+    -- * TODO comment
+  , dfLikeFifo
   ) where
 
 -- base
@@ -61,6 +64,7 @@ import qualified Prelude as P
 import           Prelude hiding
   (map, const, fst, snd, pure, either, filter, zipWith, zip)
 import           Control.Applicative (Alternative ((<|>)))
+import           Control.Monad.State (when, get, put, modify, runState)
 import           Data.Bool (bool)
 import qualified Data.Bifunctor as B
 import           Data.Bifunctor (Bifunctor)
@@ -969,3 +973,88 @@ simulate dfA dfB conf@SimulationConfig{..} circ inputs =
 resetGen :: C.KnownDomain dom => Int -> C.Reset dom
 resetGen n = C.unsafeFromHighPolarity
   (C.fromList (replicate n True <> repeat False))
+
+-- | DfLike to DfLike fifo
+-- * Reading from the given address pops an item from the fifo and returns Right
+-- * Reading from statusAddress returns Left, and how much free space is left in the buffer
+-- * Doesn't accept a new read request before the old one is done
+-- * Reading from any other address is acknowledged, but the fifo element is not popped and nothing is replied
+-- * When reading from an empty fifo, will respond with error and Left 0
+-- * Only responds to BmFixed burst mode, other modes are acknowledged but nothing happens
+-- * Respects burst length, will respond with the correct number of replies
+-- * Can use the user channel on ReadData,
+-- *   replying with one of three user-provided replies,
+-- *   depending on what message is being sent (fifo item, fifo status, or error)
+-- * Uses blockram to store data
+dfLikeFifo ::
+  (1 + n) ~ depth => -- TODO do we need all these constraints
+  C.HiddenClockResetEnable dom =>
+  CE.KnownNat depth =>
+  CE.KnownNat (CE.BitSize dat) =>
+  CE.NFDataX dat =>
+  CE.NFDataX (Data dfB dat) =>
+  CE.NFDataX (Payload dat) =>
+  DfLike dom dfA dat =>
+  DfLike dom dfB dat =>
+  DfLike dom dfB () =>
+  -- | A proxy to our dfLike type
+  Proxy (dfA dat) ->
+  -- | A proxy to our dfLike type
+  Proxy (dfB dat) ->
+  -- | A proxy to our dfLike type
+  Proxy (dfB ()) ->
+  -- | TODO comment
+  Data dfB () ->
+  -- | Depth of the fifo
+  CE.SNat depth ->
+  -- |
+  Circuit (dfA dat) (dfB dat)
+dfLikeFifo dfAProxy dfBProxy blankDfBProxy blankPayload fifoDepth = Circuit (C.hideReset circuitFunction) where
+
+  -- implemented using a fixed-size array
+  --   write location and read location are both stored
+  --   to write, write to current location and move one to the right
+  --   to read, read from current location and move one to the right
+  --   loop around from the end to the beginning if necessary
+
+  circuitFunction reset (inpA, inpB) = (otpA, otpB) where
+    brRead = C.readNew (C.blockRam (C.replicate fifoDepth $ CE.errorX "axi4Sink: undefined initial fifo buffer value")) brReadAddr brWrite
+    (brReadAddr, brWrite, otpA, otpB) = CE.unbundle $ C.mealy machineAsFunction (s0 dfBProxy fifoDepth) $ CE.bundle (brRead, CE.unsafeToHighPolarity reset, inpA, inpB)
+
+  machineAsFunction s i = (s',o) where (o,s') = runState (fullStateMachine i) s
+
+  -- initial state
+  -- (current output data, amount of space left, next place to read from, next place to write to)
+  s0 :: (DfLike dom df dat, CE.KnownNat n) => Proxy (df dat) -> CE.SNat n -> (Data df dat, CE.Index (n+1), CE.Index (n+1), CE.Index (n+1))
+  s0 pxy _ = (noData pxy, maxBound, 0, 0) -- TODO they can just be index n
+
+  -- when reset is on, output blank/default and don't change any state
+  fullStateMachine (_,True,_,_) = P.pure (0, Nothing, boolToAck dfAProxy False, noData dfBProxy)
+  fullStateMachine (brRead,False,inpDat,otpAck) = do
+    rightStateMachine brRead
+    -- fix some outputs before they get changed for next time later on
+    (rightOtp, _, brReadAddr, _) <- get
+    (brWrite, inpAck) <- leftStateMachine inpDat
+    when (ackToBool dfBProxy otpAck) $ modify removeDataOtp
+    P.pure (brReadAddr, brWrite, inpAck, rightOtp)
+
+  -- given dfA input, decide dfA output
+  leftStateMachine d = case (getPayload dfAProxy d) of
+    Nothing -> P.pure (Nothing, boolToAck dfAProxy False)
+    (Just inpData) -> do
+      (otp, numFree, nextRead, nextWrite) <- get
+      if numFree == 0 then P.pure (Nothing, boolToAck dfAProxy False) else do
+        put (otp, numFree-1, nextRead, incIdxLooping nextWrite)
+        P.pure (Just (nextWrite, inpData), boolToAck dfAProxy True)
+
+  -- given dfB input, decide dfB output
+  rightStateMachine brRead = do
+    (currOtp, numFree, nextRead, nextWrite) <- get
+    case (getPayload dfBProxy currOtp, numFree == maxBound) of
+      (Nothing, False) -> put (setPayload blankDfBProxy dfBProxy blankPayload (Just brRead), numFree+1, incIdxLooping nextRead, nextWrite)
+      _ -> P.pure ()
+
+  removeDataOtp (_,b,c,d) = (noData dfBProxy,b,c,d)
+
+  -- we have Index (depth+1) but we only want to access blockram up to depth-1
+  incIdxLooping idx = if idx == (maxBound-1) then 0 else idx+1
