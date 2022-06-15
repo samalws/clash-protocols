@@ -1,42 +1,55 @@
-{-# LANGUAGE FlexibleInstances, MultiParamTypeClasses #-}
+{-# LANGUAGE MultiParamTypeClasses, FlexibleContexts #-}
 
 module Protocols.Fifo where
 
 import           Prelude hiding (replicate)
-import           Data.Maybe (isJust)
 import           Control.Monad.State (State, runState)
 import           Clash.Prelude
+import           Data.Maybe (isJust)
+import           Data.Proxy (Proxy(..))
 
 -- me
 import           Protocols.Internal
 
 
+class (NFDataX (FifoInpState fwd bwd), NFDataX (FifoInpDat fwd bwd)) => FifoInput fwd bwd where
+  type FifoInpState fwd bwd
+  type FifoInpDat fwd bwd
+  fifoInpFn :: (KnownNat depth) => fwd -> Index (depth+1) -> State (FifoInpState fwd bwd) (bwd, Maybe (FifoInpDat fwd bwd))
+  fifoInpS0 :: (KnownNat depth) => Proxy (fwd,bwd) -> SNat depth -> FifoInpState fwd bwd
+  fifoInpBlank :: (KnownNat depth) => Proxy (fwd,bwd) -> SNat depth -> bwd
+
+class (NFDataX (FifoOtpState fwd bwd), NFDataX (FifoOtpDat fwd bwd)) => FifoOutput fwd bwd where
+  type FifoOtpState fwd bwd
+  type FifoOtpDat fwd bwd
+  fifoOtpFn :: (KnownNat depth) => bwd -> Index (depth+1) -> FifoOtpDat fwd bwd -> State (FifoOtpState fwd bwd) (fwd, Bool)
+  fifoOtpS0 :: (KnownNat depth) => Proxy (fwd,bwd) -> SNat depth -> FifoOtpState fwd bwd
+  fifoOtpBlank :: (KnownNat depth) => Proxy (fwd,bwd) -> SNat depth -> fwd
+
 
 -- | Generalized fifo
 -- * Uses blockram to store data
-generalizedFifo ::
+fifo ::
   HiddenClockResetEnable dom =>
-  KnownNat depth =>
+  KnownNat fifoDepth =>
   NFDataX dat =>
-  NFDataX sA =>
-  NFDataX sB =>
+  FifoInput fwdA bwdA =>
+  FifoOutput fwdB bwdB =>
+  FifoInpDat fwdA bwdA ~ dat =>
+  FifoInpState fwdA bwdA ~ sA =>
+  FifoOtpDat fwdB bwdB ~ dat =>
+  FifoOtpState fwdB bwdB ~ sB =>
   Protocol tA =>
   Protocol tB =>
   Fwd tA ~ Signal dom fwdA =>
   Bwd tA ~ Signal dom bwdA =>
   Fwd tB ~ Signal dom fwdB =>
   Bwd tB ~ Signal dom bwdB =>
-  (fwdA -> (Index (depth+1)) -> State sA (bwdA, Maybe dat)) ->
-  sA -> bwdA ->
-  (bwdB -> (Index (depth+1)) -> dat -> State sB (fwdB, Bool)) ->
-  sB -> fwdB ->
-  -- | Depth of the fifo
-  SNat depth ->
-  -- |
+  Proxy (fwdA,bwdA) ->
+  Proxy (fwdB,bwdB) ->
+  SNat fifoDepth ->
   Circuit tA tB
--- fA :: iA -> space left -> State sA (oA,Maybe push)
--- fB :: iB -> space left -> pop -> State sB (oB,popped)
-generalizedFifo fA sA0 defA fB sB0 defB fifoDepth = Circuit (hideReset circuitFunction) where
+fifo pxyA pxyB fifoDepth = Circuit (hideReset circuitFunction) where
 
   -- implemented using a fixed-size array
   --   write location and read location are both stored
@@ -46,19 +59,24 @@ generalizedFifo fA sA0 defA fB sB0 defB fifoDepth = Circuit (hideReset circuitFu
 
   circuitFunction reset (inpA, inpB) = (otpA, otpB) where
     brRead = readNew (blockRam (replicate fifoDepth $ errorX "generalizedFifo: undefined initial fifo buffer value")) brReadAddr brWrite
-    (brReadAddr, brWrite, otpA, otpB) = unbundle $ mealy machineAsFunction (s0 sA0 sB0 fifoDepth) $ bundle (brRead, unsafeToHighPolarity reset, inpA, inpB)
+    (brReadAddr, brWrite, otpA, otpB) = unbundle $ mealy machineAsFunction s0 $ bundle (brRead, unsafeToHighPolarity reset, inpA, inpB)
 
-  machineAsFunction _ (_, True, _, _) = (s0 sA0 sB0 fifoDepth, (0, Nothing, defA, defB))
+  machineAsFunction _ (_, True, _, _) = (s0, (0, Nothing, fifoInpBlank pxyA fifoDepth, fifoOtpBlank pxyB fifoDepth))
   machineAsFunction (sA,sB,rAddr,wAddr,amtLeft) (brRead, False, iA, iB) =
-    let ((oA, maybePush), sA') = runState (fA iA amtLeft) sA
+    let ((oA, maybePush), sA') = runState (fifoInpFn iA amtLeft) sA
         (wAddr', amtLeft') = if (isJust maybePush) then (incIdxLooping wAddr, amtLeft-1) else (wAddr, amtLeft)
         brWrite = (wAddr,) <$> maybePush
-        ((oB, popped), sB') = runState (fB iB amtLeft' brRead) sB
+        ((oB, popped), sB') = runState (fifoOtpFn iB amtLeft' brRead) sB
         (rAddr', amtLeft'') = if popped then (incIdxLooping rAddr, amtLeft+1) else (rAddr, amtLeft')
         brReadAddr = rAddr'
     in  ((sA', sB', rAddr', wAddr', amtLeft''), (brReadAddr, brWrite, oA, oB))
 
-  s0 :: (KnownNat n) => sA -> sB -> SNat n -> (sA, sB, Index n, Index n, Index (n+1))
-  s0 _sA0 _sB0 _ = (_sA0, _sB0, 0, 0, maxBound)
+  s0 = (fifoInpS0 pxyA fifoDepth, fifoOtpS0 pxyB fifoDepth, _0 fifoDepth, _0 fifoDepth, _maxBound fifoDepth)
+
+  _0 :: (KnownNat n) => SNat n -> Index n
+  _0 = const 0
+
+  _maxBound :: (KnownNat n) => SNat n -> Index (n+1)
+  _maxBound = const maxBound
 
   incIdxLooping idx = if idx == maxBound then 0 else idx+1
