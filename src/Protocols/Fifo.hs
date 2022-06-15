@@ -3,13 +3,15 @@
 module Protocols.Fifo where
 
 import           Prelude hiding (replicate)
-import           Control.Monad.State (State, runState)
+import           Control.Monad (when)
+import           Control.Monad.State (State, runState, get, put)
 import           Clash.Prelude
 import           Data.Maybe (isJust)
 import           Data.Proxy (Proxy(..))
 
 -- me
 import           Protocols.Internal
+import           Protocols.Df (Data(..))
 
 
 class (NFDataX (FifoInpState fwd bwd), NFDataX (FifoInpDat fwd bwd)) => FifoInput fwd bwd where
@@ -70,6 +72,7 @@ fifo pxyA pxyB fifoDepth = Circuit (hideReset circuitFunction) where
         (rAddr', amtLeft'') = if popped then (incIdxLooping rAddr, amtLeft+1) else (rAddr, amtLeft')
         brReadAddr = rAddr'
     in  ((sA', sB', rAddr', wAddr', amtLeft''), (brReadAddr, brWrite, oA, oB))
+  -- TODO send otp immediately if we just pushed onto an empty queue
 
   s0 = (fifoInpS0 pxyA fifoDepth, fifoOtpS0 pxyB fifoDepth, _0 fifoDepth, _0 fifoDepth, _maxBound fifoDepth)
 
@@ -80,3 +83,26 @@ fifo pxyA pxyB fifoDepth = Circuit (hideReset circuitFunction) where
   _maxBound = const maxBound
 
   incIdxLooping idx = if idx == maxBound then 0 else idx+1
+
+
+instance (NFDataX dat) => FifoInput (Data dat) Ack where
+  type FifoInpState (Data dat) Ack = ()
+  type FifoInpDat (Data dat) Ack = dat
+  fifoInpFn (Data inp) n | n > 0 = pure (Ack True, Just inp)
+  fifoInpFn _ _ = pure (Ack False, Nothing)
+  fifoInpS0 _ _ = ()
+  fifoInpBlank _ _ = Ack False
+
+instance (NFDataX dat) => FifoOutput (Data dat) Ack where
+  type FifoOtpState (Data dat) Ack = Maybe dat
+  type FifoOtpDat (Data dat) Ack = dat
+  fifoOtpFn (Ack ack) numLeft queueItem = do
+    sending <- get
+    retVal <- case (sending, numLeft == maxBound) of
+      (Just toSend, _) -> pure (Data toSend, False)
+      (Nothing, False) -> put (Just queueItem) >> pure (Data queueItem, True)
+      (Nothing, True) -> pure (NoData, False)
+    when ack $ put Nothing
+    pure retVal
+  fifoOtpS0 _ _ = Nothing
+  fifoOtpBlank _ _ = NoData
