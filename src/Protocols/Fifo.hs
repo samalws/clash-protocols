@@ -4,10 +4,10 @@ module Protocols.Fifo where
 
 import           Prelude hiding (replicate)
 import           Control.Monad (when)
-import           Control.Monad.State (StateT(..), State, runState, get, put)
+import           Control.Monad.State (StateT(..), State, runState, get, put, gets, modify)
 import           Clash.Prelude hiding ((&&),(||))
 import           Data.Functor.Identity (Identity(..))
-import           Data.Maybe (isJust)
+import           Data.Maybe (isJust, fromJust, isNothing)
 import           Data.Proxy (Proxy(..))
 
 -- me
@@ -114,7 +114,7 @@ instance (NFDataX dat, KnownNat depth) => FifoOutput (Data dat) Ack dat depth wh
 makeState :: (s -> (a,s)) -> State s a
 makeState f = StateT (Identity . f)
 
-instance (NFDataX dat, NFDataX wrUser, NFDataX rdUser, KnownNat dp1, dp1 ~ (depth + 1), KnownNat (Width aw), KnownNat (Width w_iw), KnownNat (Width r_iw)) =>
+instance (NFDataX wrUser, NFDataX rdUser, KnownNat wdBytes, KnownNat dp1, dp1 ~ (depth + 1), KnownNat (Width aw), KnownNat (Width w_iw), KnownNat (Width r_iw)) =>
   FifoInput
     (M2S_WriteAddress 'KeepBurst waKeepSize w_lw w_iw aw waKeepRegion waKeepBurstLength waKeepLock waKeepCache waKeepPermissions waKeepQos waUser,
      M2S_WriteData 'KeepStrobe wdBytes wdUser,
@@ -126,7 +126,7 @@ instance (NFDataX dat, NFDataX wrUser, NFDataX rdUser, KnownNat dp1, dp1 ~ (dept
      S2M_WriteResponse 'KeepResponse w_iw wrUser,
      S2M_ReadAddress,
      S2M_ReadData 'KeepResponse r_iw rdUser (Index dp1))
-    dat
+    (Vec wdBytes (Maybe (BitVector 8)))
     depth
     where
   type FifoInpState
@@ -140,7 +140,7 @@ instance (NFDataX dat, NFDataX wrUser, NFDataX rdUser, KnownNat dp1, dp1 ~ (dept
      S2M_WriteResponse 'KeepResponse w_iw wrUser,
      S2M_ReadAddress,
      S2M_ReadData 'KeepResponse r_iw rdUser (Index dp1))
-    dat
+    (Vec wdBytes (Maybe (BitVector 8)))
     depth
     = (Maybe (BitVector (Width w_iw)), S2M_WriteResponse 'KeepResponse w_iw wrUser, Index (2^8), BitVector (Width r_iw), S2M_ReadData 'KeepResponse r_iw rdUser (Index dp1))
   -- (Just write id if we're being written to (otherwise Nothing), write response, burst length left for send status output, status output read id, status output)
@@ -155,7 +155,7 @@ instance (NFDataX dat, NFDataX wrUser, NFDataX rdUser, KnownNat dp1, dp1 ~ (dept
      S2M_WriteResponse 'KeepResponse w_iw wrUser,
      S2M_ReadAddress,
      S2M_ReadData 'KeepResponse r_iw rdUser (Index dp1))
-    dat
+    (Vec wdBytes (Maybe (BitVector 8)))
     depth
     = (BitVector (Width aw), Maybe (BitVector (Width aw)), wrUser, rdUser)
     -- write data address, read status address, user response for write, user response for read
@@ -166,14 +166,65 @@ instance (NFDataX dat, NFDataX wrUser, NFDataX rdUser, KnownNat dp1, dp1 ~ (dept
      errorX "FifoOutput for Axi4: No initial value for read id",
      S2M_NoReadData)
   fifoInpBlank _ _ _ = (S2M_WriteAddress{_awready = False}, S2M_WriteData{_wready = False}, S2M_NoWriteResponse, S2M_ReadAddress{_arready = False}, S2M_NoReadData)
-  fifoInpFn _ _ (dataAddr,statusAddr,dataUsr,statusUsr) (wAddrVal, wDataVal, wRespAck, rAddrVal, rDataAck) amtLeft = makeState stateFn where
+  fifoInpFn _ _ (dataAddr,statusAddr,wrUser,rdUser) (wAddrVal, wDataVal, wRespAck, rAddrVal, rDataAck) amtLeft = makeState stateFn where
     stateFn (writeId, writeResp, readBurstLenLeft, readId, readData)
       = let (((wAddrAck, wDataAck, wRespVal), writeVal), (writeId', writeResp')) = runState writeStateMachine (writeId, writeResp)
             ((rAddrAck, rDataVal), (readBurstLenLeft', readId', readData')) = runState readStateMachine (readBurstLenLeft, readId, readData)
         in  (((wAddrAck, wDataAck, wRespVal, rAddrAck, rDataVal), writeVal), (writeId', writeResp', readBurstLenLeft', readId', readData'))
 
-    writeStateMachine = errorX "?"
-    readStateMachine = errorX "?"
+    writeStateMachine = do
+      wAddrAck <- processWAddr wAddrVal
+      (wDataAck, toPop) <- processWData wDataVal
+      wRespVal <- gets snd
+      processWRespAck
+      pure ((wAddrAck, wDataAck, wRespVal), toPop)
+
+    processWAddr M2S_NoWriteAddress = pure (S2M_WriteAddress{_awready = False})
+    processWAddr M2S_WriteAddress{ _awburst } | _awburst /= BmFixed = pure (S2M_WriteAddress{_awready = True})
+    processWAddr M2S_WriteAddress{_awaddr, _awid} = do
+      (_,b) <- get
+      put (if _awaddr == dataAddr then Just _awid else Nothing, b)
+      pure (S2M_WriteAddress{_awready = True})
+
+    processWData M2S_NoWriteData = pure (S2M_WriteData{_wready = False}, Nothing)
+    processWData M2S_WriteData{_wlast, _wdata} = do
+      (shouldRead,respS2M) <- get
+      -- we only want to output _wready = false if we're the recpient of the writes AND our buffer is full
+      -- we only want to push if we're the recpient of the writes AND our buffer has space available
+      if (isNothing shouldRead || amtLeft == 0) then pure (S2M_WriteData{_wready = isNothing shouldRead}, Nothing) else do
+        put (Nothing,
+             if _wlast then S2M_WriteResponse {_bid = fromJust shouldRead, _bresp = ROkay, _buser = wrUser } else respS2M)
+        pure (S2M_WriteData{_wready = True}, Just _wdata)
+
+    processWRespAck = when (_bready wRespAck) $ modify (\(a,_) -> (a,S2M_NoWriteResponse))
+
+    readStateMachine = do
+      rAddrAck <- processRAddr rAddrVal
+      sendRData
+      (_,_,rDataVal) <- get
+      clearRData rDataAck
+      pure (rAddrAck, rDataVal)
+
+    -- if state is being asked for, log the burst length requested
+    processRAddr M2S_NoReadAddress = pure (S2M_ReadAddress { _arready = False })
+    processRAddr M2S_ReadAddress{ _arburst } | _arburst /= BmFixed = pure (S2M_ReadAddress{ _arready = True })
+    processRAddr M2S_ReadAddress{ _araddr, _arlen, _arid } = do
+      (burstLenLeft,_,c) <- get
+      when (Just _araddr == statusAddr && burstLenLeft == 0) $ put (_arlen,_arid,c)
+      pure (S2M_ReadAddress { _arready = burstLenLeft /= 0 })
+
+    -- write down what status message we're sending (so it doesn't change between clock cycles)
+    sendRData = do
+      (burstLenLeft,rid,statusOut) <- get
+      -- case (our status is requested, we aren't already giving it) of
+      case (burstLenLeft == 0, statusOut) of
+        (False, S2M_NoReadData) -> put (burstLenLeft-1,rid,S2M_ReadData { _rdata = amtLeft, _rid = rid, _rresp = ROkay, _rlast = burstLenLeft == 1, _ruser = rdUser })
+        _ -> pure ()
+
+    clearRData M2S_ReadData{ _rready } = when _rready $ do
+      (a,b,_) <- get
+      put (a, b, S2M_NoReadData)
+
 
 instance (NFDataX dat, NFDataX rdUser, KnownNat dp1, dp1 ~ (depth + 1), KnownNat (Width aw), KnownNat (Width iw)) =>
   FifoOutput
