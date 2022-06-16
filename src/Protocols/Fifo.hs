@@ -254,19 +254,19 @@ instance (KnownNat idWidth, KnownNat dataWidth, KnownNat depth, KnownNat destWid
   fifoInpFn _ _ _ (Axi4StreamM2S { streamBytes }) n | n > 0 = pure (Axi4StreamS2M { tReady = True }, Just streamBytes)
   fifoInpFn _ _ _ _ _ = pure (Axi4StreamS2M { tReady = False }, Nothing)
 
-instance (KnownNat idWidth, KnownNat dataWidth, KnownNat depth, KnownNat destWidth, NFDataX userType) =>
-    FifoOutput (Axi4StreamM2S idWidth destWidth userType dataWidth) Axi4StreamS2M (Vec dataWidth Axi4StreamByte) depth where
-  type FifoOtpState (Axi4StreamM2S idWidth destWidth userType dataWidth) Axi4StreamS2M (Vec dataWidth Axi4StreamByte) depth
-    = (Axi4StreamM2S idWidth destWidth userType dataWidth)
-  type FifoOtpParam (Axi4StreamM2S idWidth destWidth userType dataWidth) Axi4StreamS2M (Vec dataWidth Axi4StreamByte) depth
-    = (BitVector destWidth, userType)
+instance (KnownNat idWidth, KnownNat dataWidth, KnownNat depth, KnownNat destWidth, dp1 ~ (depth + 1), KnownNat dp1) =>
+    FifoOutput (Axi4StreamM2S idWidth destWidth (Index dp1) dataWidth) Axi4StreamS2M (Vec dataWidth Axi4StreamByte) depth where
+  type FifoOtpState (Axi4StreamM2S idWidth destWidth (Index dp1) dataWidth) Axi4StreamS2M (Vec dataWidth Axi4StreamByte) depth
+    = (Axi4StreamM2S idWidth destWidth (Index dp1) dataWidth)
+  type FifoOtpParam (Axi4StreamM2S idWidth destWidth (Index dp1) dataWidth) Axi4StreamS2M (Vec dataWidth Axi4StreamByte) depth
+    = BitVector destWidth
 
   fifoOtpS0 _ _ _ = NoAxi4StreamM2S
   fifoOtpBlank _ _ _ = NoAxi4StreamM2S
-  fifoOtpFn _ _ (tDest, tUser) Axi4StreamS2M{ tReady } amtLeft queueItem = do
+  fifoOtpFn _ _ tDest Axi4StreamS2M{ tReady } amtLeft queueItem = do
     sending <- get
     popped <- case (sending, amtLeft == maxBound) of
-      (NoAxi4StreamM2S, False) -> put (Axi4StreamM2S { streamBytes = queueItem, tLast = False, tId = 0 {- TODO -}, tDest, tUser }) >> pure True
+      (NoAxi4StreamM2S, False) -> put (Axi4StreamM2S { streamBytes = queueItem, tLast = False, tId = 0 {- TODO -}, tDest, tUser = amtLeft+1 }) >> pure True
       _ -> pure False
     toSend <- get
     when tReady $ put NoAxi4StreamM2S
