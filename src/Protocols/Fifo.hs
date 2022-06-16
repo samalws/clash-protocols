@@ -4,34 +4,37 @@ module Protocols.Fifo where
 
 import           Prelude hiding (replicate)
 import           Control.Monad (when)
-import           Control.Monad.State (State, runState, get, put)
+import           Control.Monad.State (StateT(..), State, runState, get, put)
 import           Clash.Prelude hiding ((&&),(||))
+import           Data.Functor.Identity (Identity(..))
 import           Data.Maybe (isJust)
 import           Data.Proxy (Proxy(..))
 
 -- me
 import           Protocols.Internal
 import           Protocols.Df (Data(..))
-import           Protocols.Axi4.Common (KeepBurst(..), KeepSize(..), KeepBurstLength(..), KeepResponse(..), Width, BurstMode(..), Resp(..))
+import           Protocols.Axi4.Common (KeepBurst(..), KeepSize(..), KeepBurstLength(..), KeepResponse(..), KeepStrobe(..), Width, BurstMode(..), Resp(..))
 import           Protocols.Axi4.ReadAddress (M2S_ReadAddress(..), S2M_ReadAddress(..))
 import           Protocols.Axi4.ReadData (M2S_ReadData(..), S2M_ReadData(..))
+import           Protocols.Axi4.WriteAddress (M2S_WriteAddress(..), S2M_WriteAddress(..))
+import           Protocols.Axi4.WriteData (M2S_WriteData(..), S2M_WriteData(..))
+import           Protocols.Axi4.WriteResponse (M2S_WriteResponse(..), S2M_WriteResponse(..))
+import           Protocols.Axi4.Stream.Axi4Stream
 
 
-class (NFDataX (FifoInpState fwd bwd depth), NFDataX (FifoInpDat fwd bwd depth), KnownNat depth) => FifoInput fwd bwd depth where
-  type FifoInpState fwd bwd depth
-  type FifoInpDat fwd bwd depth
-  type FifoInpParam fwd bwd depth
-  fifoInpFn :: FifoInpParam fwd bwd depth -> fwd -> Index (depth+1) -> State (FifoInpState fwd bwd depth) (bwd, Maybe (FifoInpDat fwd bwd depth))
-  fifoInpS0 :: Proxy (fwd,bwd) -> SNat depth -> FifoInpParam fwd bwd depth -> FifoInpState fwd bwd depth
-  fifoInpBlank :: Proxy (fwd,bwd) -> SNat depth -> FifoInpParam fwd bwd depth -> bwd
+class (NFDataX (FifoInpState fwd bwd dat depth), NFDataX dat, KnownNat depth) => FifoInput fwd bwd dat (depth :: Nat) where
+  type FifoInpState fwd bwd dat depth
+  type FifoInpParam fwd bwd dat depth
+  fifoInpS0 :: Proxy (fwd,bwd,dat) -> SNat depth -> FifoInpParam fwd bwd dat depth -> FifoInpState fwd bwd dat depth
+  fifoInpBlank :: Proxy (fwd,bwd,dat) -> SNat depth -> FifoInpParam fwd bwd dat depth -> bwd
+  fifoInpFn :: Proxy (fwd,bwd,dat) -> SNat depth -> FifoInpParam fwd bwd dat depth -> fwd -> Index (depth+1) -> State (FifoInpState fwd bwd dat depth) (bwd, Maybe dat)
 
-class (NFDataX (FifoOtpState fwd bwd depth), NFDataX (FifoOtpDat fwd bwd depth), KnownNat depth) => FifoOutput fwd bwd depth where
-  type FifoOtpState fwd bwd depth
-  type FifoOtpDat fwd bwd depth
-  type FifoOtpParam fwd bwd depth
-  fifoOtpFn :: FifoOtpParam fwd bwd depth -> bwd -> Index (depth+1) -> FifoOtpDat fwd bwd depth -> State (FifoOtpState fwd bwd depth) (fwd, Bool)
-  fifoOtpS0 :: Proxy (fwd,bwd) -> SNat depth -> FifoOtpParam fwd bwd depth -> FifoOtpState fwd bwd depth
-  fifoOtpBlank :: Proxy (fwd,bwd) -> SNat depth -> FifoOtpParam fwd bwd depth -> fwd
+class (NFDataX (FifoOtpState fwd bwd dat depth), NFDataX dat, KnownNat depth) => FifoOutput fwd bwd dat (depth :: Nat) where
+  type FifoOtpState fwd bwd dat depth
+  type FifoOtpParam fwd bwd dat depth
+  fifoOtpS0 :: Proxy (fwd,bwd,dat) -> SNat depth -> FifoOtpParam fwd bwd dat depth -> FifoOtpState fwd bwd dat depth
+  fifoOtpBlank :: Proxy (fwd,bwd,dat) -> SNat depth -> FifoOtpParam fwd bwd dat depth -> fwd
+  fifoOtpFn :: Proxy (fwd,bwd,dat) -> SNat depth -> FifoOtpParam fwd bwd dat depth -> bwd -> Index (depth+1) -> dat -> State (FifoOtpState fwd bwd dat depth) (fwd, Bool)
 
 
 -- | Generalized fifo
@@ -40,17 +43,15 @@ fifo ::
   HiddenClockResetEnable dom =>
   KnownNat depth =>
   NFDataX dat =>
-  FifoInput fwdA bwdA depth =>
-  FifoOutput fwdB bwdB depth =>
-  FifoInpDat fwdA bwdA depth ~ dat =>
-  FifoInpState fwdA bwdA depth ~ sA =>
-  FifoOtpDat fwdB bwdB depth ~ dat =>
-  FifoOtpState fwdB bwdB depth ~ sB =>
-  Proxy (fwdA,bwdA) ->
-  Proxy (fwdB,bwdB) ->
+  FifoInput fwdA bwdA dat depth =>
+  FifoOutput fwdB bwdB dat depth =>
+  FifoInpState fwdA bwdA dat depth ~ sA =>
+  FifoOtpState fwdB bwdB dat depth ~ sB =>
+  Proxy (fwdA,bwdA,dat) ->
+  Proxy (fwdB,bwdB,dat) ->
   SNat depth ->
-  FifoInpParam fwdA bwdA depth ->
-  FifoOtpParam fwdB bwdB depth ->
+  FifoInpParam fwdA bwdA dat depth ->
+  FifoOtpParam fwdB bwdB dat depth ->
   (Signal dom fwdA, Signal dom bwdB) ->
   (Signal dom bwdA, Signal dom fwdB)
 fifo pxyA pxyB fifoDepth paramA paramB = hideReset circuitFunction where
@@ -67,10 +68,10 @@ fifo pxyA pxyB fifoDepth paramA paramB = hideReset circuitFunction where
 
   machineAsFunction _ (_, True, _, _) = (s0, (0, Nothing, fifoInpBlank pxyA fifoDepth paramA, fifoOtpBlank pxyB fifoDepth paramB))
   machineAsFunction (sA,sB,rAddr,wAddr,amtLeft) (brRead, False, iA, iB) =
-    let ((oA, maybePush), sA') = runState (fifoInpFn paramA iA amtLeft) sA
+    let ((oA, maybePush), sA') = runState (fifoInpFn pxyA fifoDepth paramA iA amtLeft) sA
         (wAddr', amtLeft') = if (isJust maybePush) then (incIdxLooping wAddr, amtLeft-1) else (wAddr, amtLeft)
         brWrite = (wAddr,) <$> maybePush
-        ((oB, popped), sB') = runState (fifoOtpFn paramB iB amtLeft' brRead) sB
+        ((oB, popped), sB') = runState (fifoOtpFn pxyB fifoDepth paramB iB amtLeft' brRead) sB
         (rAddr', amtLeft'') = if popped then (incIdxLooping rAddr, amtLeft+1) else (rAddr, amtLeft')
         brReadAddr = rAddr'
     in  ((sA', sB', rAddr', wAddr', amtLeft''), (brReadAddr, brWrite, oA, oB))
@@ -87,20 +88,20 @@ fifo pxyA pxyB fifoDepth paramA paramB = hideReset circuitFunction where
   incIdxLooping idx = if idx == maxBound then 0 else idx+1
 
 
-instance (NFDataX dat, KnownNat depth) => FifoInput (Data dat) Ack depth where
-  type FifoInpState (Data dat) Ack depth = ()
-  type FifoInpDat (Data dat) Ack depth = dat
-  type FifoInpParam (Data dat) Ack depth = ()
-  fifoInpFn _ (Data inp) n | n > 0 = pure (Ack True, Just inp)
-  fifoInpFn _ _ _ = pure (Ack False, Nothing)
+instance (NFDataX dat, KnownNat depth) => FifoInput (Data dat) Ack dat depth where
+  type FifoInpState (Data dat) Ack dat depth = ()
+  type FifoInpParam (Data dat) Ack dat depth = ()
   fifoInpS0 _ _ _ = ()
   fifoInpBlank _ _ _ = Ack False
+  fifoInpFn _ _ _ (Data inp) n | n > 0 = pure (Ack True, Just inp)
+  fifoInpFn _ _ _ _ _ = pure (Ack False, Nothing)
 
-instance (NFDataX dat, KnownNat depth) => FifoOutput (Data dat) Ack depth where
-  type FifoOtpState (Data dat) Ack depth = Maybe dat
-  type FifoOtpDat (Data dat) Ack depth = dat
-  type FifoOtpParam (Data dat) Ack depth = ()
-  fifoOtpFn _ (Ack ack) amtLeft queueItem = do
+instance (NFDataX dat, KnownNat depth) => FifoOutput (Data dat) Ack dat depth where
+  type FifoOtpState (Data dat) Ack dat depth = Maybe dat
+  type FifoOtpParam (Data dat) Ack dat depth = ()
+  fifoOtpS0 _ _ _ = Nothing
+  fifoOtpBlank _ _ _ = NoData
+  fifoOtpFn _ _ _ (Ack ack) amtLeft queueItem = do
     sending <- get
     retVal <- case (sending, amtLeft == maxBound) of
       (Just toSend, _) -> pure (Data toSend, False)
@@ -108,9 +109,71 @@ instance (NFDataX dat, KnownNat depth) => FifoOutput (Data dat) Ack depth where
       (Nothing, True) -> pure (NoData, False)
     when ack $ put Nothing
     pure retVal
-  fifoOtpS0 _ _ _ = Nothing
-  fifoOtpBlank _ _ _ = NoData
 
+
+makeState :: (s -> (a,s)) -> State s a
+makeState f = StateT (Identity . f)
+
+instance (NFDataX dat, NFDataX wrUser, NFDataX rdUser, KnownNat dp1, dp1 ~ (depth + 1), KnownNat (Width aw), KnownNat (Width w_iw), KnownNat (Width r_iw)) =>
+  FifoInput
+    (M2S_WriteAddress 'KeepBurst waKeepSize w_lw w_iw aw waKeepRegion waKeepBurstLength waKeepLock waKeepCache waKeepPermissions waKeepQos waUser,
+     M2S_WriteData 'KeepStrobe wdBytes wdUser,
+     M2S_WriteResponse,
+     M2S_ReadAddress 'KeepBurst 'NoSize r_lw r_iw aw raKeepRegion 'KeepBurstLength raKeepLock raKeepCache raKeepPermissions raKeepQos raUser,
+     M2S_ReadData)
+    (S2M_WriteAddress,
+     S2M_WriteData,
+     S2M_WriteResponse 'KeepResponse w_iw wrUser,
+     S2M_ReadAddress,
+     S2M_ReadData 'KeepResponse r_iw rdUser (Index dp1))
+    dat
+    depth
+    where
+  type FifoInpState
+    (M2S_WriteAddress 'KeepBurst waKeepSize w_lw w_iw aw waKeepRegion waKeepBurstLength waKeepLock waKeepCache waKeepPermissions waKeepQos waUser,
+     M2S_WriteData 'KeepStrobe wdBytes wdUser,
+     M2S_WriteResponse,
+     M2S_ReadAddress 'KeepBurst 'NoSize r_lw r_iw aw raKeepRegion 'KeepBurstLength raKeepLock raKeepCache raKeepPermissions raKeepQos raUser,
+     M2S_ReadData)
+    (S2M_WriteAddress,
+     S2M_WriteData,
+     S2M_WriteResponse 'KeepResponse w_iw wrUser,
+     S2M_ReadAddress,
+     S2M_ReadData 'KeepResponse r_iw rdUser (Index dp1))
+    dat
+    depth
+    = (Maybe (BitVector (Width w_iw)), S2M_WriteResponse 'KeepResponse w_iw wrUser, Index (2^8), BitVector (Width r_iw), S2M_ReadData 'KeepResponse r_iw rdUser (Index dp1))
+  -- (Just write id if we're being written to (otherwise Nothing), write response, burst length left for send status output, status output read id, status output)
+  type FifoInpParam
+    (M2S_WriteAddress 'KeepBurst waKeepSize w_lw w_iw aw waKeepRegion waKeepBurstLength waKeepLock waKeepCache waKeepPermissions waKeepQos waUser,
+     M2S_WriteData 'KeepStrobe wdBytes wdUser,
+     M2S_WriteResponse,
+     M2S_ReadAddress 'KeepBurst 'NoSize r_lw r_iw aw raKeepRegion 'KeepBurstLength raKeepLock raKeepCache raKeepPermissions raKeepQos raUser,
+     M2S_ReadData)
+    (S2M_WriteAddress,
+     S2M_WriteData,
+     S2M_WriteResponse 'KeepResponse w_iw wrUser,
+     S2M_ReadAddress,
+     S2M_ReadData 'KeepResponse r_iw rdUser (Index dp1))
+    dat
+    depth
+    = (BitVector (Width aw), Maybe (BitVector (Width aw)), wrUser, rdUser)
+    -- write data address, read status address, user response for write, user response for read
+  fifoInpS0 _ _ _ =
+    (Nothing,
+     S2M_NoWriteResponse,
+     0,
+     errorX "FifoOutput for Axi4: No initial value for read id",
+     S2M_NoReadData)
+  fifoInpBlank _ _ _ = (S2M_WriteAddress{_awready = False}, S2M_WriteData{_wready = False}, S2M_NoWriteResponse, S2M_ReadAddress{_arready = False}, S2M_NoReadData)
+  fifoInpFn _ _ (dataAddr,statusAddr,dataUsr,statusUsr) (wAddrVal, wDataVal, wRespAck, rAddrVal, rDataAck) amtLeft = makeState stateFn where
+    stateFn (writeId, writeResp, readBurstLenLeft, readId, readData)
+      = let (((wAddrAck, wDataAck, wRespVal), writeVal), (writeId', writeResp')) = runState writeStateMachine (writeId, writeResp)
+            ((rAddrAck, rDataVal), (readBurstLenLeft', readId', readData')) = runState readStateMachine (readBurstLenLeft, readId, readData)
+        in  (((wAddrAck, wDataAck, wRespVal, rAddrAck, rDataVal), writeVal), (writeId', writeResp', readBurstLenLeft', readId', readData'))
+
+    writeStateMachine = errorX "?"
+    readStateMachine = errorX "?"
 
 instance (NFDataX dat, NFDataX rdUser, KnownNat dp1, dp1 ~ (depth + 1), KnownNat (Width aw), KnownNat (Width iw)) =>
   FifoOutput
@@ -118,6 +181,7 @@ instance (NFDataX dat, NFDataX rdUser, KnownNat dp1, dp1 ~ (depth + 1), KnownNat
      S2M_ReadData 'KeepResponse iw rdUser (Either (Index dp1) dat))
     (M2S_ReadAddress 'KeepBurst 'NoSize lw iw aw keepRegion 'KeepBurstLength keepLock keepCache keepPermissions keepQos raData,
      M2S_ReadData)
+    dat
     depth
     where
   type FifoOtpState
@@ -125,21 +189,16 @@ instance (NFDataX dat, NFDataX rdUser, KnownNat dp1, dp1 ~ (depth + 1), KnownNat
      S2M_ReadData 'KeepResponse iw rdUser (Either (Index dp1) dat))
     (M2S_ReadAddress 'KeepBurst 'NoSize lw iw aw keepRegion 'KeepBurstLength keepLock keepCache keepPermissions keepQos raData,
      M2S_ReadData)
+    dat
     depth
     = (Bool, Index (2^8), BitVector (Width iw), S2M_ReadData 'KeepResponse iw rdUser (Either (Index dp1) dat))
     -- (what we're sending: status (false) or data (true), burst length left, read id, read data currently sending)
-  type FifoOtpDat
-    (S2M_ReadAddress,
-     S2M_ReadData 'KeepResponse iw rdUser (Either (Index dp1) dat))
-    (M2S_ReadAddress 'KeepBurst 'NoSize lw iw aw keepRegion 'KeepBurstLength keepLock keepCache keepPermissions keepQos raData,
-     M2S_ReadData)
-    depth
-    = dat
   type FifoOtpParam
     (S2M_ReadAddress,
      S2M_ReadData 'KeepResponse iw rdUser (Either (Index dp1) dat))
     (M2S_ReadAddress 'KeepBurst 'NoSize lw iw aw keepRegion 'KeepBurstLength keepLock keepCache keepPermissions keepQos raData,
      M2S_ReadData)
+    dat
     depth
     = (BitVector (Width aw), Maybe (BitVector (Width aw)), rdUser, rdUser, rdUser)
     -- data address, status address, user responses for: fifo item, fifo status, error
@@ -149,7 +208,7 @@ instance (NFDataX dat, NFDataX rdUser, KnownNat dp1, dp1 ~ (depth + 1), KnownNat
      errorX "FifoOutput for Axi4: No initial value for read id",
      S2M_NoReadData)
   fifoOtpBlank _ _ _ = (S2M_ReadAddress { _arready = False }, S2M_NoReadData)
-  fifoOtpFn (dataAddr,statusAddr,usrA,usrB,usrC) (addrVal, dataAck) amtLeft popVal = do
+  fifoOtpFn _ _ (dataAddr,statusAddr,usrA,usrB,usrC) (addrVal, dataAck) amtLeft queueItem = do
     addrAck <- processAddr addrVal
     (dataVal,popped) <- sendData
     processDataAck dataAck
@@ -166,13 +225,13 @@ instance (NFDataX dat, NFDataX rdUser, KnownNat dp1, dp1 ~ (depth + 1), KnownNat
         (isData,burstLenLeft,readId,currOtp) <- get
         popped <- case (currOtp, isData, burstLenLeft == 0, amtLeft == maxBound) of
           (S2M_NoReadData, True, False, False) -> do
-            put (isData, burstLenLeft, readId, S2M_ReadData { _rid = readId, _rdata = Right popVal, _rresp = ROkay, _rlast = burstLenLeft == 1, _ruser = usrA })
+            put (isData, burstLenLeft-1, readId, S2M_ReadData { _rid = readId, _rdata = Right queueItem, _rresp = ROkay, _rlast = burstLenLeft == 1, _ruser = usrA })
             pure True
           (S2M_NoReadData, True, False, True) -> do
-            put (isData, burstLenLeft, readId, S2M_ReadData { _rid = readId, _rdata = Left amtLeft, _rresp = RSlaveError, _rlast = burstLenLeft == 1, _ruser = usrC })
+            put (isData, burstLenLeft-1, readId, S2M_ReadData { _rid = readId, _rdata = Left amtLeft, _rresp = RSlaveError, _rlast = burstLenLeft == 1, _ruser = usrC })
             pure False
           (S2M_NoReadData, False, False, _) -> do
-            put (isData, burstLenLeft, readId, S2M_ReadData { _rid = readId, _rdata = Left amtLeft, _rresp = ROkay, _rlast = burstLenLeft == 1, _ruser = usrB })
+            put (isData, burstLenLeft-1, readId, S2M_ReadData { _rid = readId, _rdata = Left amtLeft, _rresp = ROkay, _rlast = burstLenLeft == 1, _ruser = usrB })
             pure False
           _ -> pure False
         (_,_,_,currOtp') <- get
@@ -181,3 +240,34 @@ instance (NFDataX dat, NFDataX rdUser, KnownNat dp1, dp1 ~ (depth + 1), KnownNat
       processDataAck M2S_ReadData{_rready} = when _rready $ do
         (a,b,c,_) <- get
         put (a,b,c,S2M_NoReadData)
+
+
+instance (KnownNat idWidth, KnownNat dataWidth, KnownNat depth, KnownNat destWidth, NFDataX userType) =>
+    FifoInput (Axi4StreamM2S idWidth destWidth userType dataWidth) Axi4StreamS2M (Vec dataWidth Axi4StreamByte) depth where
+  type FifoInpState (Axi4StreamM2S idWidth destWidth userType dataWidth) Axi4StreamS2M (Vec dataWidth Axi4StreamByte) depth
+    = ()
+  type FifoInpParam (Axi4StreamM2S idWidth destWidth userType dataWidth) Axi4StreamS2M (Vec dataWidth Axi4StreamByte) depth
+    = ()
+
+  fifoInpS0 _ _ _ = ()
+  fifoInpBlank _ _ _ = Axi4StreamS2M { tReady = False }
+  fifoInpFn _ _ _ (Axi4StreamM2S { streamBytes }) n | n > 0 = pure (Axi4StreamS2M { tReady = True }, Just streamBytes)
+  fifoInpFn _ _ _ _ _ = pure (Axi4StreamS2M { tReady = False }, Nothing)
+
+instance (KnownNat idWidth, KnownNat dataWidth, KnownNat depth, KnownNat destWidth, NFDataX userType) =>
+    FifoOutput (Axi4StreamM2S idWidth destWidth userType dataWidth) Axi4StreamS2M (Vec dataWidth Axi4StreamByte) depth where
+  type FifoOtpState (Axi4StreamM2S idWidth destWidth userType dataWidth) Axi4StreamS2M (Vec dataWidth Axi4StreamByte) depth
+    = (Axi4StreamM2S idWidth destWidth userType dataWidth)
+  type FifoOtpParam (Axi4StreamM2S idWidth destWidth userType dataWidth) Axi4StreamS2M (Vec dataWidth Axi4StreamByte) depth
+    = (BitVector destWidth, userType)
+
+  fifoOtpS0 _ _ _ = NoAxi4StreamM2S
+  fifoOtpBlank _ _ _ = NoAxi4StreamM2S
+  fifoOtpFn _ _ (tDest, tUser) Axi4StreamS2M{ tReady } amtLeft queueItem = do
+    sending <- get
+    popped <- case (sending, amtLeft == maxBound) of
+      (NoAxi4StreamM2S, False) -> put (Axi4StreamM2S { streamBytes = queueItem, tLast = False, tId = 0 {- TODO -}, tDest, tUser }) >> pure True
+      _ -> pure False
+    toSend <- get
+    when tReady $ put NoAxi4StreamM2S
+    pure (toSend, popped)
