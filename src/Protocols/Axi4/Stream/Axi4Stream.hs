@@ -1,6 +1,6 @@
 {-# LANGUAGE FlexibleInstances, MultiParamTypeClasses #-}
 
-module Protocols.Axi4.Stream.Axi4Stream where -- TODO bad module name
+module Protocols.Axi4.Stream.Axi4Stream where
 
 -- base
 import           Control.DeepSeq (NFData)
@@ -19,24 +19,43 @@ import           Protocols.Internal
 import           Protocols.DfLike (DfLike)
 import qualified Protocols.DfLike as DfLike
 
-data Axi4StreamByte = DataByte (Unsigned 8) | PositionByte | NullByte  deriving (Generic, C.NFDataX, C.ShowX, Eq, NFData, Show)
+-- | Each byte sent along an AXI4 Stream can either be
+-- a data byte, a position byte, or a null byte.
+-- The value of position and null bytes should be ignored.
+-- Additionally, null bytes can be added or dropped.
+data Axi4StreamByte = DataByte (Unsigned 8)
+                    | PositionByte
+                    | NullByte
+                    deriving (Generic, C.NFDataX, C.ShowX, Eq, NFData, Show)
 
+-- | Data sent from master to slave.
+-- dataType should only ever be @Vec n Axi4StreamByte@
+-- for some n, but is left open-ended in order to
+-- be able to implement DfLike.
+-- The tvalid field is left out: messages with
+-- @tvalid = False@ should be sent as a @NoAxi4StreamM2S@.
+-- The tdata, tstrb, and tkeep fields are all grouped
+-- in the @_tdata@ field in this datatype (see @Axi4StreamByte@).
 data Axi4StreamM2S idWidth destWidth userType dataType
   = NoAxi4StreamM2S
   | Axi4StreamM2S
   {
-    tData :: dataType,
-    tLast :: Bool,
-    tId   :: Unsigned idWidth,
-    tDest :: Unsigned destWidth,
-    tUser :: userType
+    _tdata :: dataType,
+    _tlast :: Bool,
+    _tid   :: Unsigned idWidth,
+    _tdest :: Unsigned destWidth,
+    _tuser :: userType
   }
   deriving (Generic, C.NFDataX, C.ShowX, Eq, NFData, Show)
 
+-- | Data sent from slave to master.
+-- A simple acknowledge message.
 data Axi4StreamS2M = Axi4StreamS2M { tReady :: Bool } deriving (Generic, C.NFDataX, C.ShowX, Eq, NFData, Show)
 
+-- | Type for AXI4 Stream protocol.
 data Axi4Stream (dom :: Domain) (idWidth :: Nat) (destWidth :: Nat) (userType :: Type) (dataType :: Type)
 
+-- | @dataType = Vec n Axi4StreamByte@ is enforced here
 instance (dataType ~ Vec dataLen Axi4StreamByte) => Protocol (Axi4Stream dom idWidth destWidth userType dataType) where
   type Fwd (Axi4Stream dom idWidth destWidth userType dataType) = Signal dom (Axi4StreamM2S idWidth destWidth userType dataType)
   type Bwd (Axi4Stream dom idWidth destWidth userType dataType) = Signal dom Axi4StreamS2M
@@ -56,14 +75,16 @@ instance (dataType ~ Vec dataLen Axi4StreamByte, C.KnownDomain dom, KnownNat idW
 
   stallC conf (C.head -> (stallAck, stalls)) = DfLike.stall Proxy conf stallAck stalls
 
+-- | Grab the data from a master-to-slave message, if there is any
 streamM2SToMaybe :: Axi4StreamM2S idWidth destWidth userType dataType -> Maybe dataType
 streamM2SToMaybe NoAxi4StreamM2S = Nothing
-streamM2SToMaybe m2s = Just (tData m2s)
+streamM2SToMaybe m2s = Just (_tdata m2s)
 
 instance (dataType ~ Vec dataLen Axi4StreamByte, C.KnownDomain dom, KnownNat idWidth, KnownNat destWidth) => Drivable (Axi4Stream dom idWidth destWidth userType dataType) where
   type ExpectType (Axi4Stream dom idWidth destWidth userType dataType) = [dataType]
 
-  toSimulateType Proxy = fmap (\dat -> (Axi4StreamM2S { tData = dat, tLast = False, tId = 0, tDest = 0, tUser = P.undefined }))
+  -- | All the fields aside from @_tdata@ are left at zero/default values.
+  toSimulateType Proxy = fmap (\dat -> (Axi4StreamM2S { _tdata = dat, _tlast = False, _tid = 0, _tdest = 0, _tuser = P.undefined }))
   fromSimulateType Proxy = Maybe.mapMaybe streamM2SToMaybe
 
   driveC = DfLike.drive Proxy
@@ -76,8 +97,9 @@ instance (dataType ~ Vec dataLen Axi4StreamByte, KnownNat idWidth, KnownNat dest
 
   getPayload = const $ streamM2SToMaybe
 
-  setPayload _ _ NoAxi4StreamM2S (Just b) = Axi4StreamM2S { tData = b, tLast = False, tId = 0, tDest = 0, tUser = P.undefined }
-  setPayload _ _ m2s (Just b) = m2s { tData = b }
+  -- | If we try to give data to a @NoAxi4StreamM2S@, all the fields aside from @_tdata@ are left at zero/default values.
+  setPayload _ _ NoAxi4StreamM2S (Just b) = Axi4StreamM2S { _tdata = b, _tlast = False, _tid = 0, _tdest = 0, _tuser = P.undefined }
+  setPayload _ _ m2s (Just b) = m2s { _tdata = b }
   setPayload _ _ _ Nothing = NoAxi4StreamM2S
 
   noData _ = NoAxi4StreamM2S
