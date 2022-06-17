@@ -24,23 +24,51 @@ import           Protocols.Internal
 import           Protocols.Wishbone
 
 
+-- | Protocols that can be used on the input side of a fifo buffer with a given datatype and depth
+-- Parameters: forward and backward signals carried by protocols; data carried; and fifo depth
 class (NFDataX (FifoInpState fwd bwd dat depth), NFDataX dat, KnownNat depth) => FifoInput fwd bwd dat (depth :: Nat) where
+  -- | State carried between clock cycles
   type FifoInpState fwd bwd dat depth
+  -- | User-provided parameters for the fifo input
   type FifoInpParam fwd bwd dat depth
+  -- | Initial state, given depth and user params
   fifoInpS0 :: Proxy (fwd,bwd,dat) -> SNat depth -> FifoInpParam fwd bwd dat depth -> FifoInpState fwd bwd dat depth
+  -- | Blank input, used when reset is on
+  -- Doesn't look at current state, but can look at depth and user params
+  -- Should not acknowledge any incoming data
   fifoInpBlank :: Proxy (fwd,bwd,dat) -> SNat depth -> FifoInpParam fwd bwd dat depth -> bwd
+  -- | State machine run every clock cycle at the fifo input port
+  -- Given user-provided params; data at the input port; and current amount of space left in the buffer
+  -- Can update state using State monad
+  -- Returns data to output back to the port (usually an acknowledge signal), and Maybe an item to put into the fifo buffer
+  -- Do not push any data to the buffer if space left == 0;
+  --   doing so will cause potential data loss and integer overflow
   fifoInpFn :: Proxy (fwd,bwd,dat) -> SNat depth -> FifoInpParam fwd bwd dat depth -> fwd -> Index (depth+1) -> State (FifoInpState fwd bwd dat depth) (bwd, Maybe dat)
 
+-- | Protocols that can be used on the input side of a fifo buffer with a given datatype and depth
+-- Parameters: forward and backward signals carried by protocols; data carried; and fifo depth
 class (NFDataX (FifoOtpState fwd bwd dat depth), NFDataX dat, KnownNat depth) => FifoOutput fwd bwd dat (depth :: Nat) where
+  -- | State carried between clock cycles
   type FifoOtpState fwd bwd dat depth
+  -- | User-provided parameters for the fifo output
   type FifoOtpParam fwd bwd dat depth
+  -- | Initial state, given depth and user params
   fifoOtpS0 :: Proxy (fwd,bwd,dat) -> SNat depth -> FifoOtpParam fwd bwd dat depth -> FifoOtpState fwd bwd dat depth
+  -- | Blank input, used when reset is on
+  -- Doesn't look at current state, but can look at depth and user params
+  -- Should not acknowledge any incoming data
   fifoOtpBlank :: Proxy (fwd,bwd,dat) -> SNat depth -> FifoOtpParam fwd bwd dat depth -> fwd
+  -- | State machine run every clock cycle at the fifo output port
+  -- Given user-provided params; data at the output port (usually an acknowledge signal); current amount of space left in the buffer; and the next data item on the buffer
+  -- Can update state using State monad
+  -- Returns data to output back to the port (usually data taken from the buffer), and whether a data item was taken from the buffer
+  -- Do not take any data from the buffer (or even read the top buffer value) if space left == maxBound;
+  --   doing so will cause potential data loss, integer overflow, and reading an undefined value
   fifoOtpFn :: Proxy (fwd,bwd,dat) -> SNat depth -> FifoOtpParam fwd bwd dat depth -> bwd -> Index (depth+1) -> dat -> State (FifoOtpState fwd bwd dat depth) (fwd, Bool)
 
 
--- | Generalized fifo
--- * Uses blockram to store data
+-- | Generalized fifo (see classes above)
+-- Uses blockram to store data
 fifo ::
   HiddenClockResetEnable dom =>
   KnownNat depth =>
@@ -65,31 +93,49 @@ fifo pxyA pxyB fifoDepth paramA paramB = hideReset circuitFunction where
   --   loop around from the end to the beginning if necessary
 
   circuitFunction reset (inpA, inpB) = (otpA, otpB) where
+    -- initialize bram
     brRead = readNew (blockRam (replicate fifoDepth $ errorX "fifo: undefined initial fifo buffer value")) brReadAddr brWrite
+    -- run the state machine (a mealy machine)
     (brReadAddr, brWrite, otpA, otpB) = unbundle $ mealy machineAsFunction s0 $ bundle (brRead, unsafeToHighPolarity reset, inpA, inpB)
 
+  -- when reset is on, set state to initial state and output blank outputs
   machineAsFunction _ (_, True, _, _) = (s0, (0, Nothing, fifoInpBlank pxyA fifoDepth paramA, fifoOtpBlank pxyB fifoDepth paramB))
   machineAsFunction (sA,sB,rAddr,wAddr,amtLeft) (brRead, False, iA, iB) =
-    let ((oA, maybePush), sA') = runState (fifoInpFn pxyA fifoDepth paramA iA amtLeft) sA
+    let -- run the input port state machine
+        ((oA, maybePush), sA') = runState (fifoInpFn pxyA fifoDepth paramA iA amtLeft) sA
+        -- potentially push an item onto blockram
         brWrite = (wAddr,) <$> maybePush
+        -- adjust write address and amount left (output state machine doesn't see amountLeft')
         (wAddr', amtLeft') = if (isJust maybePush) then (incIdxLooping wAddr, amtLeft-1) else (wAddr, amtLeft)
-        -- if we're about to push onto an empty queue, we can pop immediately instead:
+        -- if we're about to push onto an empty queue, we can pop immediately instead
         (brRead_, amtLeft_) = if (amtLeft == maxBound && isJust maybePush) then (fromJust maybePush, amtLeft') else (brRead, amtLeft)
+        -- run the output port state machine
         ((oB, popped), sB') = runState (fifoOtpFn pxyB fifoDepth paramB iB amtLeft_ brRead_) sB
+        -- adjust blockram read address and amount left
         (rAddr', amtLeft'') = if popped then (incIdxLooping rAddr, amtLeft'+1) else (rAddr, amtLeft')
         brReadAddr = rAddr'
+        -- return our new state and outputs
     in  ((sA', sB', rAddr', wAddr', amtLeft''), (brReadAddr, brWrite, oA, oB))
 
+  -- initial state
+  -- (s0 for input port (taken from class), s0 for output port (taken from class), next read address, next write address, space left in bram)
   s0 = (fifoInpS0 pxyA fifoDepth paramA, fifoOtpS0 pxyB fifoDepth paramB, _0 fifoDepth, _0 fifoDepth, _maxBound fifoDepth)
 
+  -- type level hack
+  -- make sure we have the right Index number
   _0 :: (KnownNat n) => SNat n -> Index n
   _0 = const 0
 
+  -- type level hack
+  -- make sure we have the right Index number
   _maxBound :: (KnownNat n) => SNat n -> Index (n+1)
   _maxBound = const maxBound
 
+  -- loop around to 0 if we're about to overflow, otherwise increment
   incIdxLooping idx = if idx == maxBound then 0 else idx+1
 
+
+-- Fifo classes for Df
 
 instance (NFDataX dat, KnownNat depth) => FifoInput (Data dat) Ack dat depth where
   type FifoInpState (Data dat) Ack dat depth = ()
@@ -114,8 +160,7 @@ instance (NFDataX dat, KnownNat depth) => FifoOutput (Data dat) Ack dat depth wh
     pure retVal
 
 
-makeState :: (s -> (a,s)) -> State s a
-makeState f = StateT (Identity . f)
+-- Fifo classes for Axi4
 
 instance (NFDataX wrUser, NFDataX rdUser, KnownNat wdBytes, KnownNat dp1, dp1 ~ (depth + 1), KnownNat (Width aw), KnownNat (Width w_iw), KnownNat (Width r_iw)) =>
   FifoInput
@@ -170,6 +215,10 @@ instance (NFDataX wrUser, NFDataX rdUser, KnownNat wdBytes, KnownNat dp1, dp1 ~ 
      S2M_NoReadData)
   fifoInpBlank _ _ _ = (S2M_WriteAddress{_awready = False}, S2M_WriteData{_wready = False}, S2M_NoWriteResponse, S2M_ReadAddress{_arready = False}, S2M_NoReadData)
   fifoInpFn _ _ (dataAddr,statusAddr,wrUser,rdUser) (wAddrVal, wDataVal, wRespAck, rAddrVal, rDataAck) amtLeft = makeState stateFn where
+
+    makeState :: (s -> (a,s)) -> State s a
+    makeState f = StateT (Identity . f)
+
     stateFn (writeId, writeResp, readBurstLenLeft, readId, readData)
       = let (((wAddrAck, wDataAck, wRespVal), writeVal), (writeId', writeResp')) = runState writeStateMachine (writeId, writeResp)
             ((rAddrAck, rDataVal), (readBurstLenLeft', readId', readData')) = runState readStateMachine (readBurstLenLeft, readId, readData)
@@ -296,6 +345,8 @@ instance (NFDataX dat, NFDataX rdUser, KnownNat dp1, dp1 ~ (depth + 1), KnownNat
         put (a,b,c,S2M_NoReadData)
 
 
+-- Fifo classes for Axi4Stream
+
 instance (KnownNat idWidth, KnownNat dataWidth, KnownNat depth, KnownNat destWidth, NFDataX userType) =>
     FifoInput (Axi4StreamM2S idWidth destWidth userType dataWidth) Axi4StreamS2M (Vec dataWidth Axi4StreamByte) depth where
   type FifoInpState (Axi4StreamM2S idWidth destWidth userType dataWidth) Axi4StreamS2M (Vec dataWidth Axi4StreamByte) depth
@@ -327,6 +378,8 @@ instance (KnownNat idWidth, KnownNat dataWidth, KnownNat depth, KnownNat destWid
     pure (toSend, popped)
 
 
+-- Fifo classes for Wishbone
+
 instance (NFDataX dat, KnownNat addressWidth, KnownNat dp1, dp1 ~ (depth + 1)) => FifoInput (WishboneM2S addressWidth selWidth (Either (Index dp1) dat)) (WishboneS2M (Either (Index dp1) dat)) dat (depth :: Nat) where
   type FifoInpState (WishboneM2S addressWidth selWidth (Either (Index dp1) dat)) (WishboneS2M (Either (Index dp1) dat)) dat depth = Maybe (Index (depth+1))
   type FifoInpParam (WishboneM2S addressWidth selWidth (Either (Index dp1) dat)) (WishboneS2M (Either (Index dp1) dat)) dat depth = (BitVector addressWidth, Maybe (BitVector addressWidth))
@@ -340,7 +393,6 @@ instance (NFDataX dat, KnownNat addressWidth, KnownNat dp1, dp1 ~ (depth + 1)) =
         put (Just otp)
         pure (wishboneS2M { acknowledge = True, readData = Left otp }, Nothing)
     | otherwise = put Nothing >> pure (wishboneS2M { acknowledge = strobe m2s }, Nothing)
-
 
 instance (NFDataX dat, KnownNat addressWidth, KnownNat dp1, dp1 ~ (depth + 1)) => FifoOutput (WishboneS2M (Either (Index dp1) dat)) (WishboneM2S addressWidth selWidth (Either (Index dp1) dat)) dat (depth :: Nat) where
   type FifoOtpState (WishboneS2M (Either (Index dp1) dat)) (WishboneM2S addressWidth selWidth (Either (Index dp1) dat)) dat depth = Maybe (WishboneS2M (Either (Index dp1) dat))
