@@ -5,14 +5,13 @@ module Protocols.Fifo where
 import           Prelude hiding (replicate)
 import           Control.Monad (when)
 import           Control.Monad.State (StateT(..), State, runState, get, put, gets, modify)
-import           Clash.Prelude hiding ((&&),(||))
+import           Clash.Prelude hiding ((&&), (||), not)
+import           Data.Either (fromRight)
 import           Data.Functor.Identity (Identity(..))
-import           Data.Maybe (isJust, fromJust, isNothing)
+import           Data.Maybe (isJust, fromJust, isNothing, fromMaybe)
 import           Data.Proxy (Proxy(..))
 
 -- me
-import           Protocols.Internal
-import           Protocols.Df (Data(..))
 import           Protocols.Axi4.Common (KeepBurst(..), KeepSize(..), KeepBurstLength(..), KeepResponse(..), KeepStrobe(..), Width, BurstMode(..), Resp(..))
 import           Protocols.Axi4.ReadAddress (M2S_ReadAddress(..), S2M_ReadAddress(..))
 import           Protocols.Axi4.ReadData (M2S_ReadData(..), S2M_ReadData(..))
@@ -20,6 +19,9 @@ import           Protocols.Axi4.WriteAddress (M2S_WriteAddress(..), S2M_WriteAdd
 import           Protocols.Axi4.WriteData (M2S_WriteData(..), S2M_WriteData(..))
 import           Protocols.Axi4.WriteResponse (M2S_WriteResponse(..), S2M_WriteResponse(..))
 import           Protocols.Axi4.Stream.Axi4Stream
+import           Protocols.Df (Data(..))
+import           Protocols.Internal
+import           Protocols.Wishbone
 
 
 class (NFDataX (FifoInpState fwd bwd dat depth), NFDataX dat, KnownNat depth) => FifoInput fwd bwd dat (depth :: Nat) where
@@ -322,3 +324,46 @@ instance (KnownNat idWidth, KnownNat dataWidth, KnownNat depth, KnownNat destWid
     toSend <- get
     when tReady $ put NoAxi4StreamM2S
     pure (toSend, popped)
+
+
+instance (NFDataX dat, KnownNat addressWidth, KnownNat dp1, dp1 ~ (depth + 1)) => FifoInput (WishboneM2S addressWidth selWidth (Either (Index dp1) dat)) (WishboneS2M (Either (Index dp1) dat)) dat (depth :: Nat) where
+  type FifoInpState (WishboneM2S addressWidth selWidth (Either (Index dp1) dat)) (WishboneS2M (Either (Index dp1) dat)) dat depth = Maybe (Index (depth+1))
+  type FifoInpParam (WishboneM2S addressWidth selWidth (Either (Index dp1) dat)) (WishboneS2M (Either (Index dp1) dat)) dat depth = (BitVector addressWidth, Maybe (BitVector addressWidth))
+  fifoInpS0 _ _ _ = Nothing
+  fifoInpBlank _ _ _ = wishboneS2M
+  fifoInpFn _ _ (fifoAddr, statusAddr) m2s amtLeft
+    | strobe m2s && addr m2s == fifoAddr && writeEnable m2s && amtLeft == 0 = put Nothing >> pure (wishboneS2M { err = True, stall = True }, Nothing)
+    | strobe m2s && addr m2s == fifoAddr && writeEnable m2s = put Nothing >> pure (wishboneS2M { acknowledge = True }, Just (fromRight (errorX "FifoInput for Wishbone: expected Right data") $ writeData m2s))
+    | strobe m2s && Just (addr m2s) == statusAddr && not (writeEnable m2s) = do
+        otp <- gets (fromMaybe amtLeft)
+        put (Just otp)
+        pure (wishboneS2M { acknowledge = True, readData = Left otp }, Nothing)
+    | otherwise = put Nothing >> pure (wishboneS2M { acknowledge = strobe m2s }, Nothing)
+
+
+instance (NFDataX dat, KnownNat addressWidth, KnownNat dp1, dp1 ~ (depth + 1)) => FifoOutput (WishboneS2M (Either (Index dp1) dat)) (WishboneM2S addressWidth selWidth (Either (Index dp1) dat)) dat (depth :: Nat) where
+  type FifoOtpState (WishboneS2M (Either (Index dp1) dat)) (WishboneM2S addressWidth selWidth (Either (Index dp1) dat)) dat depth = Maybe (WishboneS2M (Either (Index dp1) dat))
+  type FifoOtpParam (WishboneS2M (Either (Index dp1) dat)) (WishboneM2S addressWidth selWidth (Either (Index dp1) dat)) dat depth = (BitVector addressWidth, Maybe (BitVector addressWidth))
+  fifoOtpS0 _ _ _ = Nothing
+  fifoOtpBlank _ _ _ = wishboneS2M
+  fifoOtpFn _ _ (fifoAddr, statusAddr) m2s amtLeft queueItem = do
+    popped <- computeOtp
+    otp <- gets (fromMaybe wishboneS2M)
+    pure (otp, popped)
+    where
+      computeOtp
+        | strobe m2s && addr m2s == fifoAddr && not (writeEnable m2s) = do
+            otp <- get
+            case (otp, amtLeft == maxBound) of
+              (Nothing, False) ->
+                put (Just (wishboneS2M { acknowledge = True, readData = Right queueItem })) >> pure True
+              (Just otp', False) ->
+                if not (err otp') then pure False else put (Just (wishboneS2M { acknowledge = True, readData = Right queueItem })) >> pure True
+              (Nothing, True) ->
+                put (Just (wishboneS2M { err = True })) >> pure False
+              _ -> pure False
+        | strobe m2s && Just (addr m2s) == statusAddr && not (writeEnable m2s) = do
+            otp <- get
+            when (isNothing otp) $ put (Just (wishboneS2M { acknowledge = True, readData = Left amtLeft }))
+            pure False
+        | otherwise = put Nothing >> pure False

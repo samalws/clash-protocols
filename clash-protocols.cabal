@@ -157,6 +157,7 @@ library
     Protocols.Hedgehog.Internal
     Protocols.Internal
     Protocols.Plugin
+    Protocols.Wishbone
 
     -- 'testProperty' is broken upstream, it reports wrong test names
     -- TODO: test / upstream ^
