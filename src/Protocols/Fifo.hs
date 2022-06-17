@@ -71,13 +71,14 @@ fifo pxyA pxyB fifoDepth paramA paramB = hideReset circuitFunction where
   machineAsFunction _ (_, True, _, _) = (s0, (0, Nothing, fifoInpBlank pxyA fifoDepth paramA, fifoOtpBlank pxyB fifoDepth paramB))
   machineAsFunction (sA,sB,rAddr,wAddr,amtLeft) (brRead, False, iA, iB) =
     let ((oA, maybePush), sA') = runState (fifoInpFn pxyA fifoDepth paramA iA amtLeft) sA
-        (wAddr', amtLeft') = if (isJust maybePush) then (incIdxLooping wAddr, amtLeft-1) else (wAddr, amtLeft)
         brWrite = (wAddr,) <$> maybePush
-        ((oB, popped), sB') = runState (fifoOtpFn pxyB fifoDepth paramB iB amtLeft' brRead) sB
-        (rAddr', amtLeft'') = if popped then (incIdxLooping rAddr, amtLeft+1) else (rAddr, amtLeft')
+        (wAddr', amtLeft') = if (isJust maybePush) then (incIdxLooping wAddr, amtLeft-1) else (wAddr, amtLeft)
+        -- if we're about to push onto an empty queue, we can pop immediately instead:
+        (brRead_, amtLeft_) = if (amtLeft == maxBound && isJust maybePush) then (fromJust maybePush, amtLeft') else (brRead, amtLeft)
+        ((oB, popped), sB') = runState (fifoOtpFn pxyB fifoDepth paramB iB amtLeft_ brRead_) sB
+        (rAddr', amtLeft'') = if popped then (incIdxLooping rAddr, amtLeft'+1) else (rAddr, amtLeft')
         brReadAddr = rAddr'
     in  ((sA', sB', rAddr', wAddr', amtLeft''), (brReadAddr, brWrite, oA, oB))
-  -- TODO send otp immediately if we just pushed onto an empty queue
 
   s0 = (fifoInpS0 pxyA fifoDepth paramA, fifoOtpS0 pxyB fifoDepth paramB, _0 fifoDepth, _0 fifoDepth, _maxBound fifoDepth)
 
@@ -165,7 +166,7 @@ instance (NFDataX wrUser, NFDataX rdUser, KnownNat wdBytes, KnownNat dp1, dp1 ~ 
     (Nothing,
      S2M_NoWriteResponse,
      0,
-     errorX "FifoOutput for Axi4: No initial value for read id",
+     errorX "FifoInput for Axi4: No initial value for read id",
      S2M_NoReadData)
   fifoInpBlank _ _ _ = (S2M_WriteAddress{_awready = False}, S2M_WriteData{_wready = False}, S2M_NoWriteResponse, S2M_ReadAddress{_arready = False}, S2M_NoReadData)
   fifoInpFn _ _ (dataAddr,statusAddr,wrUser,rdUser) (wAddrVal, wDataVal, wRespAck, rAddrVal, rDataAck) amtLeft = makeState stateFn where
@@ -319,7 +320,7 @@ instance (KnownNat idWidth, KnownNat dataWidth, KnownNat depth, KnownNat destWid
   fifoOtpFn _ _ tDest Axi4StreamS2M{ tReady } amtLeft queueItem = do
     sending <- get
     popped <- case (sending, amtLeft == maxBound) of
-      (NoAxi4StreamM2S, False) -> put (Axi4StreamM2S { streamBytes = queueItem, tLast = False, tId = 0 {- TODO -}, tDest, tUser = amtLeft+1 }) >> pure True
+      (NoAxi4StreamM2S, False) -> put (Axi4StreamM2S { streamBytes = queueItem, tLast = False, tId = 0, tDest, tUser = amtLeft+1 }) >> pure True
       _ -> pure False
     toSend <- get
     when tReady $ put NoAxi4StreamM2S
