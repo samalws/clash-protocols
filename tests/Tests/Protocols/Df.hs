@@ -1,6 +1,5 @@
 {-# LANGUAGE NumericUnderscores #-}
 {-# LANGUAGE MonomorphismRestriction #-}
-{-# LANGUAGE NamedFieldPuns #-}
 {-# OPTIONS_GHC -fno-warn-orphans #-} -- Hashable (Index n)
 
 module Tests.Protocols.Df where
@@ -362,7 +361,6 @@ prop_selectUntil =
     inputs0 <- Gen.list (Range.singleton n) (Gen.list (Range.linear 1 10) genSmallInt)
     let tagEnd xs = zip (init xs) (repeat False) <> [(last xs, True)]
     pure (concatMap tagEnd inputs0)
-
 
 tests :: TestTree
 tests =

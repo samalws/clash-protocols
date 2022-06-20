@@ -45,8 +45,8 @@ instance (Hashable t, C.KnownNat n, 1 <= n, 1 <= (n C.- 1), 1 <= ((n C.- 1) C.- 
 ---------------------------------------------------------------
 ---------------------------- TESTS ----------------------------
 ---------------------------------------------------------------
-prop_fifo_id :: Property
-prop_fifo_id = propWithModelSingleDomain
+prop_df_fifo_id :: Property
+prop_df_fifo_id = propWithModelSingleDomain
                @C.System
                defExpectOptions
                (DfTest.genData DfTest.genSmallInt)
@@ -68,6 +68,30 @@ prop_stream_fifo_id = propWithModelSingleDomain
   where
   ckt :: (C.HiddenClockResetEnable dom) => Circuit (Stream.Axi4Stream dom 1 1 () (C.Vec 10 Stream.Axi4StreamByte)) (Stream.Axi4Stream dom 1 1 (C.Index 11) (C.Vec 10 Stream.Axi4StreamByte))
   ckt = Circuit (fifo (Proxy @(_,_,(C.Vec 10 Stream.Axi4StreamByte))) Proxy (C.SNat @10) () 0)
+
+prop_df_stream_fifo_id :: Property
+prop_df_stream_fifo_id = propWithModelSingleDomain
+                      @C.System
+                      defExpectOptions
+                      (DfTest.genData (genVec genAxi4StreamByte))
+                      (C.exposeClockResetEnable id)
+                      (C.exposeClockResetEnable @C.System ckt)
+                      (\a b -> tally a === tally b)
+  where
+  ckt :: (C.HiddenClockResetEnable dom) => Circuit (Df dom (C.Vec 10 Stream.Axi4StreamByte)) (Stream.Axi4Stream dom 1 1 (C.Index 11) (C.Vec 10 Stream.Axi4StreamByte))
+  ckt = Circuit (fifo (Proxy @(_,_,(C.Vec 10 Stream.Axi4StreamByte))) Proxy (C.SNat @10) () 0)
+
+prop_stream_df_fifo_id :: Property
+prop_stream_df_fifo_id = propWithModelSingleDomain
+                      @C.System
+                      defExpectOptions
+                      (DfTest.genData (genVec genAxi4StreamByte))
+                      (C.exposeClockResetEnable id)
+                      (C.exposeClockResetEnable @C.System ckt)
+                      (\a b -> tally a === tally b)
+  where
+  ckt :: (C.HiddenClockResetEnable dom) => Circuit (Stream.Axi4Stream dom 1 1 () (C.Vec 10 Stream.Axi4StreamByte)) (Df dom (C.Vec 10 Stream.Axi4StreamByte))
+  ckt = Circuit (fifo (Proxy @(_,_,(C.Vec 10 Stream.Axi4StreamByte))) Proxy (C.SNat @10) () ())
 
 
 tests :: TestTree
