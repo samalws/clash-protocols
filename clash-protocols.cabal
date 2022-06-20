@@ -133,6 +133,7 @@ library
     , strict-tuple
 
     , mtl
+    , hashable
 
       -- To be removed; we need 'Test.Tasty.Hedgehog.Extra' to fix upstream issues
     , tasty >= 1.2 && < 1.5

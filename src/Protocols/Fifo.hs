@@ -348,34 +348,37 @@ instance (NFDataX dat, NFDataX rdUser, KnownNat dp1, dp1 ~ (depth + 1), KnownNat
 
 -- Fifo classes for Axi4Stream
 
-instance (KnownNat idWidth, KnownNat dataWidth, KnownNat depth, KnownNat destWidth, NFDataX userType) =>
-    FifoInput (Axi4StreamM2S idWidth destWidth userType dataWidth) Axi4StreamS2M (Vec dataWidth Axi4StreamByte) depth where
-  type FifoInpState (Axi4StreamM2S idWidth destWidth userType dataWidth) Axi4StreamS2M (Vec dataWidth Axi4StreamByte) depth
+instance (KnownNat idWidth, KnownNat depth, KnownNat destWidth, NFDataX userType, NFDataX dataType) =>
+    FifoInput (Axi4StreamM2S idWidth destWidth userType dataType) Axi4StreamS2M dataType depth where
+  type FifoInpState (Axi4StreamM2S idWidth destWidth userType dataType) Axi4StreamS2M dataType depth
     = ()
-  type FifoInpParam (Axi4StreamM2S idWidth destWidth userType dataWidth) Axi4StreamS2M (Vec dataWidth Axi4StreamByte) depth
+  type FifoInpParam (Axi4StreamM2S idWidth destWidth userType dataType) Axi4StreamS2M dataType depth
     = ()
 
   fifoInpS0 _ _ _ = ()
-  fifoInpBlank _ _ _ = Axi4StreamS2M { tReady = False }
-  fifoInpFn _ _ _ (Axi4StreamM2S { streamBytes }) n | n > 0 = pure (Axi4StreamS2M { tReady = True }, Just streamBytes)
-  fifoInpFn _ _ _ _ _ = pure (Axi4StreamS2M { tReady = False }, Nothing)
+  fifoInpBlank _ _ _ = Axi4StreamS2M { _tready = False }
+  fifoInpFn _ _ _ (Axi4StreamM2S { _tdata }) n | n > 0 = pure (Axi4StreamS2M { _tready = True }, Just _tdata)
+  fifoInpFn _ _ _ _ _ = pure (Axi4StreamS2M { _tready = False }, Nothing)
 
-instance (KnownNat idWidth, KnownNat dataWidth, KnownNat depth, KnownNat destWidth, dp1 ~ (depth + 1), KnownNat dp1) =>
-    FifoOutput (Axi4StreamM2S idWidth destWidth (Index dp1) dataWidth) Axi4StreamS2M (Vec dataWidth Axi4StreamByte) depth where
-  type FifoOtpState (Axi4StreamM2S idWidth destWidth (Index dp1) dataWidth) Axi4StreamS2M (Vec dataWidth Axi4StreamByte) depth
-    = (Axi4StreamM2S idWidth destWidth (Index dp1) dataWidth)
-  type FifoOtpParam (Axi4StreamM2S idWidth destWidth (Index dp1) dataWidth) Axi4StreamS2M (Vec dataWidth Axi4StreamByte) depth
-    = BitVector destWidth
+instance (KnownNat idWidth, KnownNat depth, KnownNat destWidth, dp1 ~ (depth + 1), KnownNat dp1, NFDataX dataType) =>
+    FifoOutput (Axi4StreamM2S idWidth destWidth (Index dp1) dataType) Axi4StreamS2M dataType depth where
+  type FifoOtpState (Axi4StreamM2S idWidth destWidth (Index dp1) dataType) Axi4StreamS2M dataType depth
+    = (Axi4StreamM2S idWidth destWidth (Index dp1) dataType)
+  type FifoOtpParam (Axi4StreamM2S idWidth destWidth (Index dp1) dataType) Axi4StreamS2M dataType depth
+    = (Unsigned destWidth)
 
   fifoOtpS0 _ _ _ = NoAxi4StreamM2S
   fifoOtpBlank _ _ _ = NoAxi4StreamM2S
-  fifoOtpFn _ _ tDest Axi4StreamS2M{ tReady } amtLeft queueItem = do
+  fifoOtpFn _ _ _tdest _ack amtLeft queueItem = do
+    let (Axi4StreamS2M ack) = _ack
     sending <- get
     popped <- case (sending, amtLeft == maxBound) of
-      (NoAxi4StreamM2S, False) -> put (Axi4StreamM2S { streamBytes = queueItem, tLast = False, tId = 0, tDest, tUser = amtLeft+1 }) >> pure True
+      (NoAxi4StreamM2S, False) -> put (Axi4StreamM2S { _tdata = queueItem, _tlast = False, _tid = 0, _tdest, _tuser = amtLeft+1 }) >> pure True
       _ -> pure False
     toSend <- get
-    when tReady $ put NoAxi4StreamM2S
+    get >>= \case
+      Axi4StreamM2S{} -> when ack $ put NoAxi4StreamM2S
+      _ -> pure ()
     pure (toSend, popped)
 
 
