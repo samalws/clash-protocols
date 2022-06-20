@@ -156,7 +156,8 @@ instance (NFDataX dat, KnownNat depth) => FifoOutput (Data dat) Ack dat depth wh
       (Just toSend, _) -> pure (Data toSend, False)
       (Nothing, False) -> put (Just queueItem) >> pure (Data queueItem, True)
       (Nothing, True) -> pure (NoData, False)
-    when ack $ put Nothing
+    shouldReadAck <- gets isJust -- ack might be undefined, so we shouldn't look at it unless we have to
+    when (shouldReadAck && ack) $ put Nothing
     pure retVal
 
 

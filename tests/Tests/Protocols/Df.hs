@@ -21,6 +21,7 @@ import qualified Data.HashMap.Strict as HashMap
 
 -- extra
 import Data.List (transpose, partition)
+import Data.Proxy (Proxy(..))
 
 -- deepseq
 import Control.DeepSeq (NFData)
@@ -43,6 +44,7 @@ import Test.Tasty.TH (testGroupGenerator)
 import Protocols
 import qualified Protocols.Df as Df
 import Protocols.Hedgehog
+import Protocols.Fifo (fifo)
 
 -- tests
 import Util
@@ -361,6 +363,19 @@ prop_selectUntil =
     inputs0 <- Gen.list (Range.singleton n) (Gen.list (Range.linear 1 10) genSmallInt)
     let tagEnd xs = zip (init xs) (repeat False) <> [(last xs, True)]
     pure (concatMap tagEnd inputs0)
+
+prop_fifo_id :: Property
+prop_fifo_id = propWithModelSingleDomain
+               @C.System
+               defExpectOptions
+               (genData genSmallInt)
+               (C.exposeClockResetEnable id)
+               (C.exposeClockResetEnable @C.System ckt)
+               (\a b -> tally a === tally b)
+  where
+  ckt :: (C.HiddenClockResetEnable dom) => Circuit (Df dom Int) (Df dom Int)
+  ckt = Circuit (fifo (Proxy @(Df.Data Int, Ack, Int)) (Proxy @(Df.Data Int, Ack, Int)) (C.SNat @10) () ())
+
 
 tests :: TestTree
 tests =
