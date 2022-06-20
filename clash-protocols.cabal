@@ -182,6 +182,7 @@ test-suite unittests
     Tests.Protocols
     Tests.Protocols.Df
     Tests.Protocols.Plugin
+    Tests.Protocols.Fifo
 
     Util
   build-depends:

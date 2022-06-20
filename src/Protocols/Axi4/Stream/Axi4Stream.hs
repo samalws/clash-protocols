@@ -1,4 +1,5 @@
 {-# LANGUAGE FlexibleInstances, MultiParamTypeClasses, NamedFieldPuns, UndecidableInstances #-}
+{-# OPTIONS_GHC -fno-warn-orphans #-} -- Hashable (Unsigned n)
 
 module Protocols.Axi4.Stream.Axi4Stream where
 
@@ -6,20 +7,18 @@ module Protocols.Axi4.Stream.Axi4Stream where
 import           Control.DeepSeq (NFData)
 import           Prelude hiding ()
 
+import           Data.Hashable (Hashable)
 import qualified Data.Maybe as Maybe
 import           Data.Proxy
-import           Data.Hashable (Hashable)
 import qualified Prelude as P
 
 -- clash-prelude
 import           Clash.Prelude hiding (take, concat, length)
 import qualified Clash.Prelude as C
 
-import qualified Hedgehog as H
-import qualified Hedgehog.Internal.Show as H
-import qualified Hedgehog.Internal.Property as H
-
-import Text.Show.Pretty (ppShow)
+-- testing related
+import           Hedgehog.Internal.Property (failWith)
+import           Text.Show.Pretty (ppShow)
 
 -- me
 import           Protocols.Internal
@@ -121,16 +120,7 @@ instance (dataType ~ Vec dataLen Axi4StreamByte, KnownNat idWidth, KnownNat dest
 instance (dataType ~ Vec dataLen Axi4StreamByte, C.KnownDomain dom, KnownNat idWidth, KnownNat destWidth, KnownNat dataLen, NFData userType, NFDataX userType, Show userType, ShowX userType, Eq userType) => Test (Axi4Stream dom idWidth destWidth userType dataType) where
   expectToLengths Proxy = pure . length
 
-{-
-  expectN ::
-    forall m.
-    (HasCallStack, H.MonadTest m) =>
-    Proxy (Df dom a) ->
-    ExpectOptions ->
-    C.Vec 1 Int ->
-    [Df.Data a] ->
-    m [a]
--}
+  -- directly copied from Df instance, with minor changes made
   expectN Proxy (ExpectOptions{eoEmptyTail, eoTimeout}) (C.head -> nExpected) sampled = do
     go (Maybe.fromMaybe maxBound eoTimeout) nExpected sampled
    where
@@ -138,18 +128,6 @@ instance (dataType ~ Vec dataLen Axi4StreamByte, C.KnownDomain dom, KnownNat idW
     catDatas (NoAxi4StreamM2S:xs) = catDatas xs
     catDatas (Axi4StreamM2S{_tdata=x}:xs) = x:catDatas xs
 
-{-
-    go ::
-      HasCallStack =>
-      -- Timeout counter. If it reaches zero we time out.
-      Int ->
-      -- Expected number of values
-      Int ->
-      -- Sampled data
-      [Df.Data a] ->
-      -- Results
-      m [a]
--}
     go _timeout _n [] =
       -- This really should not happen, protocols should produce data indefinitely
       error "unexpected end of signal"
@@ -159,9 +137,9 @@ instance (dataType ~ Vec dataLen Axi4StreamByte, C.KnownDomain dom, KnownNat idW
         [] -> pure (take nExpected (catDatas sampled))
         superfluous ->
           let err = "Circuit produced more output than expected:" in
-          H.failWith Nothing (err <> "\n\n" <> ppShow superfluous)
+          failWith Nothing (err <> "\n\n" <> ppShow superfluous)
     go timeout n _ | timeout <= 0 =
-      H.failWith Nothing $ concat
+      failWith Nothing $ concat
         [ "Circuit did not produce enough output. Expected "
         , show n, " more values. Sampled only " <> show (nExpected - n) <> ":\n\n"
         , ppShow (take (nExpected - n) (catDatas sampled)) ]

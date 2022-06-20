@@ -22,7 +22,6 @@ import qualified Data.HashMap.Strict as HashMap
 
 -- extra
 import Data.List (transpose, partition)
-import Data.Proxy (Proxy(..))
 
 -- deepseq
 import Control.DeepSeq (NFData)
@@ -45,8 +44,6 @@ import Test.Tasty.TH (testGroupGenerator)
 import Protocols
 import qualified Protocols.Df as Df
 import Protocols.Hedgehog
-import Protocols.Fifo (fifo)
-import qualified Protocols.Axi4.Stream.Axi4Stream as Stream -- TODO
 
 -- tests
 import Util
@@ -85,13 +82,6 @@ genVecData genA = do
   n <- genSmallInt
   dat <- genVec (Gen.list (Range.singleton n) genA)
   pure dat
-
--- TODO move
-genAxi4StreamByte :: Gen Stream.Axi4StreamByte
-genAxi4StreamByte = Gen.choice [pure Stream.NullByte, pure Stream.PositionByte, Stream.DataByte <$> Gen.integral (Range.linear 0 255)]
-
--- TODO move
-instance (Hashable t, C.KnownNat n, 1 <= n, 1 <= (n C.- 1), 1 <= ((n C.- 1) C.- 1)) => Hashable (C.Vec n t)
 
 -- Same as 'idWithModel', but specialized on 'Df'
 idWithModelDf ::
@@ -372,31 +362,6 @@ prop_selectUntil =
     inputs0 <- Gen.list (Range.singleton n) (Gen.list (Range.linear 1 10) genSmallInt)
     let tagEnd xs = zip (init xs) (repeat False) <> [(last xs, True)]
     pure (concatMap tagEnd inputs0)
-
-prop_fifo_id :: Property
-prop_fifo_id = propWithModelSingleDomain
-               @C.System
-               defExpectOptions
-               (genData genSmallInt)
-               (C.exposeClockResetEnable id)
-               (C.exposeClockResetEnable @C.System ckt)
-               (\a b -> tally a === tally b)
-  where
-  ckt :: (C.HiddenClockResetEnable dom) => Circuit (Df dom Int) (Df dom Int)
-  ckt = Circuit (fifo (Proxy @(_, _, Int)) Proxy (C.SNat @10) () ())
-
--- TODO move
-prop_stream_fifo_id :: Property
-prop_stream_fifo_id = propWithModelSingleDomain
-                      @C.System
-                      defExpectOptions
-                      (genData (genVec genAxi4StreamByte))
-                      (C.exposeClockResetEnable id)
-                      (C.exposeClockResetEnable @C.System ckt)
-                      (\a b -> tally a === tally b)
-  where
-  ckt :: (C.HiddenClockResetEnable dom) => Circuit (Stream.Axi4Stream dom 1 1 () (C.Vec 10 Stream.Axi4StreamByte)) (Stream.Axi4Stream dom 1 1 (C.Index 11) (C.Vec 10 Stream.Axi4StreamByte))
-  ckt = Circuit (fifo (Proxy @(_,_,(C.Vec 10 Stream.Axi4StreamByte))) Proxy (C.SNat @10) () 0)
 
 
 tests :: TestTree

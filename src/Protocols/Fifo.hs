@@ -376,7 +376,7 @@ instance (KnownNat idWidth, KnownNat depth, KnownNat destWidth, dp1 ~ (depth + 1
       (NoAxi4StreamM2S, False) -> put (Axi4StreamM2S { _tdata = queueItem, _tlast = False, _tid = 0, _tdest, _tuser = amtLeft+1 }) >> pure True
       _ -> pure False
     toSend <- get
-    get >>= \case
+    get >>= \case -- ack might be undefined, so we shouldn't look at it unless we have to
       Axi4StreamM2S{} -> when ack $ put NoAxi4StreamM2S
       _ -> pure ()
     pure (toSend, popped)
