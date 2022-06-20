@@ -1,4 +1,5 @@
-{-# LANGUAGE FlexibleInstances, MultiParamTypeClasses #-}
+{-# LANGUAGE FlexibleInstances, MultiParamTypeClasses, NamedFieldPuns, UndecidableInstances #-}
+{-# OPTIONS_GHC -fno-warn-orphans #-} -- Hashable (Unsigned n)
 
 module Protocols.Axi4.Stream.Axi4Stream where
 
@@ -6,18 +7,27 @@ module Protocols.Axi4.Stream.Axi4Stream where
 import           Control.DeepSeq (NFData)
 import           Prelude hiding ()
 
+import           Data.Hashable (Hashable)
 import qualified Data.Maybe as Maybe
 import           Data.Proxy
 import qualified Prelude as P
 
 -- clash-prelude
-import           Clash.Prelude
+import           Clash.Prelude hiding (take, concat, length)
 import qualified Clash.Prelude as C
+
+-- testing related
+import           Hedgehog.Internal.Property (failWith)
+import           Text.Show.Pretty (ppShow)
 
 -- me
 import           Protocols.Internal
 import           Protocols.DfLike (DfLike)
 import qualified Protocols.DfLike as DfLike
+import           Protocols.Hedgehog.Internal
+
+
+instance (KnownNat n) => Hashable (Unsigned n)
 
 -- | Each byte sent along an AXI4 Stream can either be
 -- a data byte, a position byte, or a null byte.
@@ -26,7 +36,7 @@ import qualified Protocols.DfLike as DfLike
 data Axi4StreamByte = DataByte (Unsigned 8)
                     | PositionByte
                     | NullByte
-                    deriving (Generic, C.NFDataX, C.ShowX, Eq, NFData, Show)
+                    deriving (Generic, C.NFDataX, C.ShowX, Eq, NFData, Show, Hashable)
 
 -- | Data sent from master to slave.
 -- dataType should only ever be @Vec n Axi4StreamByte@
@@ -50,7 +60,7 @@ data Axi4StreamM2S idWidth destWidth userType dataType
 
 -- | Data sent from slave to master.
 -- A simple acknowledge message.
-data Axi4StreamS2M = Axi4StreamS2M { tReady :: Bool } deriving (Generic, C.NFDataX, C.ShowX, Eq, NFData, Show)
+data Axi4StreamS2M = Axi4StreamS2M { _tready :: Bool } deriving (Generic, C.NFDataX, C.ShowX, Eq, NFData, Show)
 
 -- | Type for AXI4 Stream protocol.
 data Axi4Stream (dom :: Domain) (idWidth :: Nat) (destWidth :: Nat) (userType :: Type) (dataType :: Type)
@@ -105,4 +115,38 @@ instance (dataType ~ Vec dataLen Axi4StreamByte, KnownNat idWidth, KnownNat dest
   noData _ = NoAxi4StreamM2S
 
   boolToAck _ = Axi4StreamS2M
-  ackToBool _ = tReady
+  ackToBool _ = _tready
+
+instance (dataType ~ Vec dataLen Axi4StreamByte, C.KnownDomain dom, KnownNat idWidth, KnownNat destWidth, KnownNat dataLen, NFData userType, NFDataX userType, Show userType, ShowX userType, Eq userType) => Test (Axi4Stream dom idWidth destWidth userType dataType) where
+  expectToLengths Proxy = pure . length
+
+  -- directly copied from Df instance, with minor changes made
+  expectN Proxy (ExpectOptions{eoEmptyTail, eoTimeout}) (C.head -> nExpected) sampled = do
+    go (Maybe.fromMaybe maxBound eoTimeout) nExpected sampled
+   where
+    catDatas [] = []
+    catDatas (NoAxi4StreamM2S:xs) = catDatas xs
+    catDatas (Axi4StreamM2S{_tdata=x}:xs) = x:catDatas xs
+
+    go _timeout _n [] =
+      -- This really should not happen, protocols should produce data indefinitely
+      error "unexpected end of signal"
+    go _timeout 0 rest = do
+      -- Check for superfluous output from protocol
+      case catDatas (take eoEmptyTail rest) of
+        [] -> pure (take nExpected (catDatas sampled))
+        superfluous ->
+          let err = "Circuit produced more output than expected:" in
+          failWith Nothing (err <> "\n\n" <> ppShow superfluous)
+    go timeout n _ | timeout <= 0 =
+      failWith Nothing $ concat
+        [ "Circuit did not produce enough output. Expected "
+        , show n, " more values. Sampled only " <> show (nExpected - n) <> ":\n\n"
+        , ppShow (take (nExpected - n) (catDatas sampled)) ]
+
+    go timeout n (NoAxi4StreamM2S:as) = do
+      -- Circuit did not output valid cycle, just continue
+      go (pred timeout) n as
+    go _ n (Axi4StreamM2S{}:as) =
+      -- Circuit produced a valid cycle, reset timeout
+      go (Maybe.fromMaybe maxBound eoTimeout) (pred n) as
