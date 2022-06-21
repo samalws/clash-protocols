@@ -1,3 +1,7 @@
+{-|
+Types and instance declarations for the AXI4-stream protocol.
+-}
+
 {-# LANGUAGE FlexibleInstances, MultiParamTypeClasses, NamedFieldPuns, UndecidableInstances #-}
 {-# OPTIONS_GHC -fno-warn-orphans #-} -- Hashable (Unsigned n)
 
@@ -5,7 +9,7 @@ module Protocols.Axi4.Stream.Axi4Stream where
 
 -- base
 import           Control.DeepSeq (NFData)
-import           Prelude hiding ()
+import           Prelude
 
 import           Data.Hashable (Hashable)
 import qualified Data.Maybe as Maybe
@@ -29,7 +33,8 @@ import           Protocols.Hedgehog.Internal
 
 instance (KnownNat n) => Hashable (Unsigned n)
 
--- | Each byte sent along an AXI4 Stream can either be
+-- | A byte sent along an AXI4 Stream.
+-- Each byte can either be
 -- a data byte, a position byte, or a null byte.
 -- The value of position and null bytes should be ignored.
 -- Additionally, null bytes can be added or dropped.
@@ -86,16 +91,16 @@ instance (dataType ~ Vec dataLen Axi4StreamByte, C.KnownDomain dom, KnownNat idW
   stallC conf (C.head -> (stallAck, stalls)) = DfLike.stall Proxy conf stallAck stalls
 
 -- | Grab the data from a master-to-slave message, if there is any
-streamM2SToMaybe :: Axi4StreamM2S idWidth destWidth userType dataType -> Maybe dataType
-streamM2SToMaybe NoAxi4StreamM2S = Nothing
-streamM2SToMaybe m2s = Just (_tdata m2s)
+axi4StreamM2SToMaybe :: Axi4StreamM2S idWidth destWidth userType dataType -> Maybe dataType
+axi4StreamM2SToMaybe NoAxi4StreamM2S = Nothing
+axi4StreamM2SToMaybe m2s = Just (_tdata m2s)
 
 instance (dataType ~ Vec dataLen Axi4StreamByte, C.KnownDomain dom, KnownNat idWidth, KnownNat destWidth) => Drivable (Axi4Stream dom idWidth destWidth userType dataType) where
   type ExpectType (Axi4Stream dom idWidth destWidth userType dataType) = [dataType]
 
   -- | All the fields aside from @_tdata@ are left at zero/default values.
   toSimulateType Proxy = fmap (\dat -> (Axi4StreamM2S { _tdata = dat, _tlast = False, _tid = 0, _tdest = 0, _tuser = P.undefined }))
-  fromSimulateType Proxy = Maybe.mapMaybe streamM2SToMaybe
+  fromSimulateType Proxy = Maybe.mapMaybe axi4StreamM2SToMaybe
 
   driveC = DfLike.drive Proxy
   sampleC = DfLike.sample Proxy
@@ -105,7 +110,7 @@ instance (dataType ~ Vec dataLen Axi4StreamByte, KnownNat idWidth, KnownNat dest
   type Payload dataType = dataType
   type Ack (Axi4Stream dom idWidth destWidth userType) dataType = Axi4StreamS2M
 
-  getPayload = const $ streamM2SToMaybe
+  getPayload = const $ axi4StreamM2SToMaybe
 
   -- | If we try to give data to a @NoAxi4StreamM2S@, all the fields aside from @_tdata@ are left at zero/default values.
   setPayload _ _ NoAxi4StreamM2S (Just b) = Axi4StreamM2S { _tdata = b, _tlast = False, _tid = 0, _tdest = 0, _tuser = P.undefined }
