@@ -151,6 +151,8 @@ library
     Protocols.Axi4.WriteResponse
     Protocols.Axi4.Stream.Axi4Stream
 
+    Protocols.Avalon.Stream.AvalonStream
+
     Protocols.Df
     Protocols.DfLike
     Protocols.Fifo
