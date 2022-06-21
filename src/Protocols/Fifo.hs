@@ -9,7 +9,7 @@ Blockram is used to store fifo buffer items.
 
 module Protocols.Fifo where
 
-import           Prelude hiding (replicate)
+import           Prelude hiding (replicate, last, repeat)
 import           Control.Monad (when)
 import           Control.Monad.State (StateT(..), State, runState, get, put, gets, modify)
 import           Clash.Prelude hiding ((&&), (||), not)
@@ -384,21 +384,20 @@ instance (KnownNat idWidth, KnownNat depth, KnownNat destWidth, dp1 ~ (depth + 1
       (NoAxi4StreamM2S, False) -> put (Axi4StreamM2S { _tdata = queueItem, _tlast = False, _tid = 0, _tdest, _tuser = amtLeft+1 }) >> pure True
       _ -> pure False
     toSend <- get
-    get >>= \case -- ack might be undefined, so we shouldn't look at it unless we have to
+    case toSend of -- ack might be undefined, so we shouldn't look at it unless we have to
       Axi4StreamM2S{} -> when ack $ put NoAxi4StreamM2S
       _ -> pure ()
     pure (toSend, popped)
 
 
 -- Fifo classes for AvalonStream
--- TODO readyLatency
 -- TODO keep ready on when not receiving data?
 
 instance (KnownNat depth, NFDataX dataType) =>
-    FifoInput (AvalonStreamM2S channelWidth errorWidth dataType) (AvalonStreamS2M readyLatency) dataType depth where
-  type FifoInpState (AvalonStreamM2S channelWidth errorWidth dataType) (AvalonStreamS2M readyLatency) dataType depth
+    FifoInput (AvalonStreamM2S channelWidth errorWidth dataType) (AvalonStreamS2M 0) dataType depth where
+  type FifoInpState (AvalonStreamM2S channelWidth errorWidth dataType) (AvalonStreamS2M 0) dataType depth
     = ()
-  type FifoInpParam (AvalonStreamM2S channelWidth errorWidth dataType) (AvalonStreamS2M readyLatency) dataType depth
+  type FifoInpParam (AvalonStreamM2S channelWidth errorWidth dataType) (AvalonStreamS2M 0) dataType depth
     = ()
 
   fifoInpS0 _ _ _ = ()
@@ -406,24 +405,27 @@ instance (KnownNat depth, NFDataX dataType) =>
   fifoInpFn _ _ _ (AvalonStreamM2S { _data }) n | n > 0 = pure (AvalonStreamS2M { _ready = True }, Just _data)
   fifoInpFn _ _ _ _ _ = pure (AvalonStreamS2M { _ready = False }, Nothing)
 
-instance (KnownNat depth, KnownNat errorWidth, NFDataX dataType) =>
+instance (KnownNat depth, KnownNat errorWidth, KnownNat readyLatency, NFDataX dataType) =>
     FifoOutput (AvalonStreamM2S channelWidth errorWidth dataType) (AvalonStreamS2M readyLatency) dataType depth where
   type FifoOtpState (AvalonStreamM2S channelWidth errorWidth dataType) (AvalonStreamS2M readyLatency) dataType depth
-    = (AvalonStreamM2S channelWidth errorWidth dataType)
+    = (Vec (readyLatency+1) Bool, AvalonStreamM2S channelWidth errorWidth dataType)
   type FifoOtpParam (AvalonStreamM2S channelWidth errorWidth dataType) (AvalonStreamS2M readyLatency) dataType depth
     = (Unsigned channelWidth)
 
-  fifoOtpS0 _ _ _ = NoAvalonStreamM2S
+  fifoOtpS0 _ _ _ = (repeat False, NoAvalonStreamM2S)
   fifoOtpBlank _ _ _ = NoAvalonStreamM2S
-  fifoOtpFn _ _ _channel _ack amtLeft queueItem = do
-    let (AvalonStreamS2M ack) = _ack
-    sending <- get
+  fifoOtpFn _ _ _channel _thisAck amtLeft queueItem = do
+    let AvalonStreamS2M thisAck = _thisAck
+    ackQueue' <- gets ((thisAck +>>) . fst)
+    let ack = last ackQueue'
+    sending <- gets snd
+    put (ackQueue', sending)
     popped <- case (sending, amtLeft == maxBound) of
-      (NoAvalonStreamM2S, False) -> put (AvalonStreamM2S { _data = queueItem, _channel, _error = 0 }) >> pure True
+      (NoAvalonStreamM2S, False) -> put (ackQueue', AvalonStreamM2S { _data = queueItem, _channel, _error = 0 }) >> pure True
       _ -> pure False
-    toSend <- get
-    get >>= \case -- ack might be undefined, so we shouldn't look at it unless we have to
-      AvalonStreamM2S{} -> when ack $ put NoAvalonStreamM2S
+    toSend <- gets snd
+    case toSend of -- ack might be undefined, so we shouldn't look at it unless we have to
+      AvalonStreamM2S{} -> when ack $ put (ackQueue', NoAvalonStreamM2S)
       _ -> pure ()
     pure (toSend, popped)
 
