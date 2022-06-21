@@ -54,7 +54,7 @@ instance Protocol (AvalonStream dom readyLatency channelWidth errorWidth dataTyp
   type Fwd (AvalonStream dom readyLatency channelWidth errorWidth dataType) = Signal dom (AvalonStreamM2S channelWidth errorWidth dataType)
   type Bwd (AvalonStream dom readyLatency channelWidth errorWidth dataType) = Signal dom (AvalonStreamS2M readyLatency)
 
-instance Backpressure (AvalonStream dom readyLatency channelWidth errorWidth dataType) where
+instance Backpressure (AvalonStream dom 0 channelWidth errorWidth dataType) where
   boolsToBwd _ = C.fromList_lazy . fmap AvalonStreamS2M
 
 instance (C.KnownDomain dom, KnownNat channelWidth, KnownNat errorWidth) => Simulate (AvalonStream dom readyLatency channelWidth errorWidth dataType) where
@@ -74,8 +74,8 @@ streamM2SToMaybe :: AvalonStreamM2S channelWidth errorWidth dataType -> Maybe da
 streamM2SToMaybe NoAvalonStreamM2S = Nothing
 streamM2SToMaybe m2s = Just (_data m2s)
 
-instance (C.KnownDomain dom, KnownNat channelWidth, KnownNat errorWidth) => Drivable (AvalonStream dom readyLatency channelWidth errorWidth dataType) where
-  type ExpectType (AvalonStream dom readyLatency channelWidth errorWidth dataType) = [dataType]
+instance (C.KnownDomain dom, KnownNat channelWidth, KnownNat errorWidth) => Drivable (AvalonStream dom 0 channelWidth errorWidth dataType) where
+  type ExpectType (AvalonStream dom 0 channelWidth errorWidth dataType) = [dataType]
 
   -- | All the fields aside from @_data@ are left at zero/default values.
   toSimulateType Proxy = fmap (\dat -> (AvalonStreamM2S { _data = dat, _channel = 0, _error = 0 }))
@@ -100,9 +100,8 @@ instance (KnownNat channelWidth, KnownNat errorWidth) => DfLike dom (AvalonStrea
 
   boolToAck _ = AvalonStreamS2M
   ackToBool _ = _ready
-  -- TODO ackToBool will get misinterpreted if we have readyLatency /= 0
 
-instance (C.KnownDomain dom, KnownNat channelWidth, KnownNat errorWidth, Show dataType, ShowX dataType, NFData dataType, NFDataX dataType, Eq dataType) => Test (AvalonStream dom readyLatency channelWidth errorWidth dataType) where
+instance (C.KnownDomain dom, KnownNat channelWidth, KnownNat errorWidth, Show dataType, ShowX dataType, NFData dataType, NFDataX dataType, Eq dataType) => Test (AvalonStream dom 0 channelWidth errorWidth dataType) where
   expectToLengths Proxy = pure . length
 
   -- directly copied from Df instance, with minor changes made
