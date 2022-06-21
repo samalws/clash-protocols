@@ -31,36 +31,38 @@ import           Protocols.Hedgehog.Internal
 -- | Data sent from master to slave.
 -- The tvalid field is left out: messages with
 -- @tvalid = False@ should be sent as a @NoAvalonStreamM2S@.
-data AvalonStreamM2S channelWidth errorWidth dataType
+data AvalonStreamM2S channelWidth errorWidth emptyWidth dataType
   = NoAvalonStreamM2S
   | AvalonStreamM2S
   {
-    _data    :: dataType,
-    _channel :: Unsigned channelWidth,
-    _error   :: Unsigned errorWidth
+    _data          :: dataType,
+    _channel       :: Unsigned channelWidth,
+    _error         :: Unsigned errorWidth,
+    _startofpacket :: Bool,
+    _endofpacket   :: Bool,
+    _empty         :: Unsigned emptyWidth
   }
   deriving (Generic, C.NFDataX, C.ShowX, Eq, NFData, Show)
 -- TODO options to leave stuff out
--- TODO packet transfer signals
 
 -- | Data sent from slave to master.
 -- A simple acknowledge message.
 data AvalonStreamS2M (readyLatency :: Nat) = AvalonStreamS2M { _ready :: Bool } deriving (Generic, C.NFDataX, C.ShowX, Eq, NFData, Show)
 
 -- | Type for Avalon Stream protocol.
-data AvalonStream (dom :: Domain) (readyLatency :: Nat) (channelWidth :: Nat) (errorWidth :: Nat) (dataType :: Type)
+data AvalonStream (dom :: Domain) (readyLatency :: Nat) (channelWidth :: Nat) (errorWidth :: Nat) (emptyWidth :: Nat) (dataType :: Type)
 
-instance Protocol (AvalonStream dom readyLatency channelWidth errorWidth dataType) where
-  type Fwd (AvalonStream dom readyLatency channelWidth errorWidth dataType) = Signal dom (AvalonStreamM2S channelWidth errorWidth dataType)
-  type Bwd (AvalonStream dom readyLatency channelWidth errorWidth dataType) = Signal dom (AvalonStreamS2M readyLatency)
+instance Protocol (AvalonStream dom readyLatency channelWidth errorWidth emptyWidth dataType) where
+  type Fwd (AvalonStream dom readyLatency channelWidth errorWidth emptyWidth dataType) = Signal dom (AvalonStreamM2S channelWidth errorWidth emptyWidth dataType)
+  type Bwd (AvalonStream dom readyLatency channelWidth errorWidth emptyWidth dataType) = Signal dom (AvalonStreamS2M readyLatency)
 
-instance Backpressure (AvalonStream dom 0 channelWidth errorWidth dataType) where
+instance Backpressure (AvalonStream dom 0 channelWidth errorWidth emptyWidth dataType) where
   boolsToBwd _ = C.fromList_lazy . fmap AvalonStreamS2M
 
-instance (C.KnownDomain dom, KnownNat channelWidth, KnownNat errorWidth) => Simulate (AvalonStream dom readyLatency channelWidth errorWidth dataType) where
-  type SimulateFwdType (AvalonStream dom readyLatency channelWidth errorWidth dataType) = [AvalonStreamM2S channelWidth errorWidth dataType]
-  type SimulateBwdType (AvalonStream dom readyLatency channelWidth errorWidth dataType) = [AvalonStreamS2M readyLatency]
-  type SimulateChannels (AvalonStream dom readyLatency channelWidth errorWidth dataType) = 1
+instance (C.KnownDomain dom, KnownNat channelWidth, KnownNat errorWidth, KnownNat emptyWidth) => Simulate (AvalonStream dom readyLatency channelWidth errorWidth emptyWidth dataType) where
+  type SimulateFwdType (AvalonStream dom readyLatency channelWidth errorWidth emptyWidth dataType) = [AvalonStreamM2S channelWidth errorWidth emptyWidth dataType]
+  type SimulateBwdType (AvalonStream dom readyLatency channelWidth errorWidth emptyWidth dataType) = [AvalonStreamS2M readyLatency]
+  type SimulateChannels (AvalonStream dom readyLatency channelWidth errorWidth emptyWidth dataType) = 1
 
   simToSigFwd _ = C.fromList_lazy
   simToSigBwd _ = C.fromList_lazy
@@ -70,29 +72,31 @@ instance (C.KnownDomain dom, KnownNat channelWidth, KnownNat errorWidth) => Simu
   stallC conf (C.head -> (stallAck, stalls)) = DfLike.stall Proxy conf stallAck stalls
 
 -- | Grab the data from a master-to-slave message, if there is any
-streamM2SToMaybe :: AvalonStreamM2S channelWidth errorWidth dataType -> Maybe dataType
+streamM2SToMaybe :: AvalonStreamM2S channelWidth errorWidth emptyWidth dataType -> Maybe dataType
 streamM2SToMaybe NoAvalonStreamM2S = Nothing
 streamM2SToMaybe m2s = Just (_data m2s)
 
-instance (C.KnownDomain dom, KnownNat channelWidth, KnownNat errorWidth) => Drivable (AvalonStream dom 0 channelWidth errorWidth dataType) where
-  type ExpectType (AvalonStream dom 0 channelWidth errorWidth dataType) = [dataType]
+instance (C.KnownDomain dom, KnownNat channelWidth, KnownNat errorWidth, KnownNat emptyWidth) => Drivable (AvalonStream dom 0 channelWidth errorWidth emptyWidth dataType) where
+  type ExpectType (AvalonStream dom 0 channelWidth errorWidth emptyWidth dataType) = [dataType]
 
-  -- | All the fields aside from @_data@ are left at zero/default values.
-  toSimulateType Proxy = fmap (\dat -> (AvalonStreamM2S { _data = dat, _channel = 0, _error = 0 }))
+  -- | All the fields aside from @_data@ are left at zero/default values,
+  -- except for packet fields, which assume that this is an individual packet (start=end=True).
+  toSimulateType Proxy = fmap (\dat -> (AvalonStreamM2S { _data = dat, _channel = 0, _error = 0, _startofpacket = True, _endofpacket = True, _empty = 0 }))
   fromSimulateType Proxy = Maybe.mapMaybe streamM2SToMaybe
 
   driveC = DfLike.drive Proxy
   sampleC = DfLike.sample Proxy
 
-instance (KnownNat channelWidth, KnownNat errorWidth) => DfLike dom (AvalonStream dom readyLatency channelWidth errorWidth) dataType where
-  type Data (AvalonStream dom readyLatency channelWidth errorWidth) dataType = AvalonStreamM2S channelWidth errorWidth dataType
+instance (KnownNat channelWidth, KnownNat errorWidth, KnownNat emptyWidth) => DfLike dom (AvalonStream dom readyLatency channelWidth errorWidth emptyWidth) dataType where
+  type Data (AvalonStream dom readyLatency channelWidth errorWidth emptyWidth) dataType = AvalonStreamM2S channelWidth errorWidth emptyWidth dataType
   type Payload dataType = dataType
-  type Ack (AvalonStream dom readyLatency channelWidth errorWidth) dataType = AvalonStreamS2M readyLatency
+  type Ack (AvalonStream dom readyLatency channelWidth errorWidth emptyWidth) dataType = AvalonStreamS2M readyLatency
 
   getPayload = const $ streamM2SToMaybe
 
-  -- | If we try to give data to a @NoAvalonStreamM2S@, all the fields aside from @_data@ are left at zero/default values.
-  setPayload _ _ NoAvalonStreamM2S (Just b) = AvalonStreamM2S { _data = b, _channel = 0, _error = 0 }
+  -- | If we try to give data to a @NoAvalonStreamM2S@, all the fields aside from @_data@ and packet fields are left at zero/default values.
+  -- Packet fields assume this is an individual packet (start=end=True).
+  setPayload _ _ NoAvalonStreamM2S (Just b) = AvalonStreamM2S { _data = b, _channel = 0, _error = 0, _startofpacket = True, _endofpacket = True, _empty = 0 }
   setPayload _ _ m2s (Just b) = m2s { _data = b }
   setPayload _ _ _ Nothing = NoAvalonStreamM2S
 
@@ -101,7 +105,7 @@ instance (KnownNat channelWidth, KnownNat errorWidth) => DfLike dom (AvalonStrea
   boolToAck _ = AvalonStreamS2M
   ackToBool _ = _ready
 
-instance (C.KnownDomain dom, KnownNat channelWidth, KnownNat errorWidth, Show dataType, ShowX dataType, NFData dataType, NFDataX dataType, Eq dataType) => Test (AvalonStream dom 0 channelWidth errorWidth dataType) where
+instance (C.KnownDomain dom, KnownNat channelWidth, KnownNat errorWidth, KnownNat emptyWidth, Show dataType, ShowX dataType, NFData dataType, NFDataX dataType, Eq dataType) => Test (AvalonStream dom 0 channelWidth errorWidth emptyWidth dataType) where
   expectToLengths Proxy = pure . length
 
   -- directly copied from Df instance, with minor changes made

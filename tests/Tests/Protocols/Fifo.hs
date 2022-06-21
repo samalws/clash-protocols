@@ -103,7 +103,7 @@ prop_avalonstream_fifo_id = propWithModelSingleDomain
                             (C.exposeClockResetEnable @C.System ckt)
                             (\a b -> tally a === tally b)
   where
-  ckt :: (C.HiddenClockResetEnable dom) => Circuit (AvStream.AvalonStream dom 0 1 1 Int) (AvStream.AvalonStream dom 0 1 1 Int)
+  ckt :: (C.HiddenClockResetEnable dom) => Circuit (AvStream.AvalonStream dom 0 1 1 1 Int) (AvStream.AvalonStream dom 0 1 1 1 Int)
   ckt = Circuit (fifo (Proxy @(_,_,Int)) Proxy (C.SNat @10) () 0)
 
 prop_df_avalonstream_fifo_id :: Property
@@ -115,7 +115,7 @@ prop_df_avalonstream_fifo_id = propWithModelSingleDomain
                                (C.exposeClockResetEnable @C.System ckt)
                                (\a b -> tally a === tally b)
   where
-  ckt :: (C.HiddenClockResetEnable dom) => Circuit (Df dom Int) (AvStream.AvalonStream dom 0 1 1 Int)
+  ckt :: (C.HiddenClockResetEnable dom) => Circuit (Df dom Int) (AvStream.AvalonStream dom 0 1 1 1 Int)
   ckt = Circuit (fifo (Proxy @(_,_,Int)) Proxy (C.SNat @10) () 0)
 
 prop_avalonstream_df_fifo_id :: Property
@@ -127,7 +127,7 @@ prop_avalonstream_df_fifo_id = propWithModelSingleDomain
                                (C.exposeClockResetEnable @C.System ckt)
                                (\a b -> tally a === tally b)
   where
-  ckt :: (C.HiddenClockResetEnable dom) => Circuit (AvStream.AvalonStream dom 0 1 1 Int) (Df dom Int)
+  ckt :: (C.HiddenClockResetEnable dom) => Circuit (AvStream.AvalonStream dom 0 1 1 1 Int) (Df dom Int)
   ckt = Circuit (fifo (Proxy @(_,_,Int)) Proxy (C.SNat @10) () ())
 
 
