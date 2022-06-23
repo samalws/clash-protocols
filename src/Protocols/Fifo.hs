@@ -20,6 +20,7 @@ import           Data.Proxy (Proxy(..))
 
 -- me
 import           Protocols.Avalon.Stream.AvalonStream
+import           Protocols.Avalon.MemMap.AvalonMemMap
 import           Protocols.Axi4.Common (KeepBurst(..), KeepSize(..), KeepBurstLength(..), KeepResponse(..), KeepStrobe(..), Width, BurstMode(..), Resp(..))
 import           Protocols.Axi4.ReadAddress (M2S_ReadAddress(..), S2M_ReadAddress(..))
 import           Protocols.Axi4.ReadData (M2S_ReadData(..), S2M_ReadData(..))
@@ -428,6 +429,41 @@ instance (KnownNat depth, KnownNat errorWidth, KnownNat emptyWidth, KnownNat rea
       AvalonStreamM2S{} -> when ack $ put (ackQueue', NoAvalonStreamM2S)
       _ -> pure ()
     pure (toSend, popped)
+
+
+-- Fifo classes for AvalonMemMap
+-- TODO keep ready on when not receiving data?
+
+instance (KnownNat depth, GoodMMS2MConfig configS2M, GoodMMM2SConfig configM2S, NFDataX readDataType, NFDataX writeDataType) =>
+    FifoInput (AvalonMMM2S configM2S writeDataType) (AvalonMMS2M configS2M readDataType) writeDataType depth where
+  type FifoInpState (AvalonMMM2S configM2S writeDataType) (AvalonMMS2M configS2M readDataType) writeDataType depth
+    = ()
+  type FifoInpParam (AvalonMMM2S configM2S writeDataType) (AvalonMMS2M configS2M readDataType) writeDataType depth
+    = ()
+
+  fifoInpS0 _ _ _ = ()
+  fifoInpBlank _ _ _ = boolToMMS2M False
+  fifoInpFn _ _ _ m2s n | n > 0 && isJust (mmM2SToMaybe m2s) = pure (boolToMMS2M True, mmM2SToMaybe m2s)
+  fifoInpFn _ _ _ _ _ = pure (boolToMMS2M False, Nothing)
+
+instance (KnownNat depth, GoodMMS2MConfig configS2M, GoodMMM2SConfig configM2S, NFDataX readDataType, NFDataX writeDataType) =>
+    FifoOutput (AvalonMMM2S configM2S writeDataType) (AvalonMMS2M configS2M readDataType) writeDataType depth where
+  type FifoOtpState (AvalonMMM2S configM2S writeDataType) (AvalonMMS2M configS2M readDataType) writeDataType depth
+    = Maybe writeDataType
+  type FifoOtpParam (AvalonMMM2S configM2S writeDataType) (AvalonMMS2M configS2M readDataType) writeDataType depth
+    = ()
+
+  fifoOtpS0 _ _ _ = Nothing
+  fifoOtpBlank _ _ _ = mmM2SNoData
+  fifoOtpFn _ _ _ s2m amtLeft queueItem = do
+    sending <- get
+    retVal <- case (sending, amtLeft == maxBound) of
+      (Just toSend, _) -> pure (mmM2SSendingData { _writeData = toSend }, False)
+      (Nothing, False) -> put (Just queueItem) >> pure (mmM2SSendingData { _writeData = queueItem }, True)
+      (Nothing, True) -> pure (mmM2SNoData, False)
+    shouldReadAck <- gets isJust -- ack might be undefined, so we shouldn't look at it unless we have to
+    when (shouldReadAck && mmS2MToBool s2m) $ put Nothing
+    pure retVal
 
 
 -- Fifo classes for Wishbone

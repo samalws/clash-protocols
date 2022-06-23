@@ -152,6 +152,7 @@ library
     Protocols.Axi4.Stream.Axi4Stream
 
     Protocols.Avalon.Stream.AvalonStream
+    Protocols.Avalon.MemMap.AvalonMemMap
 
     Protocols.Df
     Protocols.DfLike

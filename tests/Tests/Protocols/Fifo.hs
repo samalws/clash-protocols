@@ -33,6 +33,7 @@ import Protocols.Hedgehog
 import Protocols.Fifo (fifo)
 import qualified Protocols.Axi4.Stream.Axi4Stream as AxStream
 import qualified Protocols.Avalon.Stream.AvalonStream as AvStream
+import qualified Protocols.Avalon.MemMap.AvalonMemMap as MM
 
 -- tests
 import Util
@@ -128,6 +129,56 @@ prop_avalonstream_df_fifo_id = propWithModelSingleDomain
                                (\a b -> tally a === tally b)
   where
   ckt :: (C.HiddenClockResetEnable dom) => Circuit (AvStream.AvalonStream dom 0 1 1 1 Int) (Df dom Int)
+  ckt = Circuit (fifo (Proxy @(_,_,Int)) Proxy (C.SNat @10) () ())
+
+prop_avalonmm_fifo_id :: Property
+prop_avalonmm_fifo_id = propWithModelSingleDomain
+                        @C.System
+                        defExpectOptions
+                        (DfTest.genData DfTest.genSmallInt)
+                        (C.exposeClockResetEnable id)
+                        (C.exposeClockResetEnable @C.System ckt)
+                        (\a b -> tally a === tally b)
+  where
+  ckt :: (C.HiddenClockResetEnable dom) => Circuit
+                                           (MM.AvalonMM dom
+                                             ('MM.AvalonMMS2MConfig 'True 'True 'True 'True 'True 'True) () 
+                                             ('MM.AvalonMMM2SConfig 'True 1 'True 'True 1 1 'True 1 'True) Int)
+                                           (MM.AvalonMM dom
+                                             ('MM.AvalonMMS2MConfig 'True 'True 'True 'True 'True 'True) ()
+                                             ('MM.AvalonMMM2SConfig 'True 1 'True 'True 1 1 'True 1 'True) Int)
+  ckt = Circuit (fifo (Proxy @(_,_,Int)) Proxy (C.SNat @10) () ())
+
+prop_avalonmm_avalonstream_fifo_id :: Property
+prop_avalonmm_avalonstream_fifo_id = propWithModelSingleDomain
+                                     @C.System
+                                     defExpectOptions
+                                     (DfTest.genData DfTest.genSmallInt)
+                                     (C.exposeClockResetEnable id)
+                                     (C.exposeClockResetEnable @C.System ckt)
+                                     (\a b -> tally a === tally b)
+  where
+  ckt :: (C.HiddenClockResetEnable dom) => Circuit
+                                           (MM.AvalonMM dom
+                                             ('MM.AvalonMMS2MConfig 'True 'True 'True 'True 'True 'True) () 
+                                             ('MM.AvalonMMM2SConfig 'True 1 'True 'True 1 1 'True 1 'True) Int)
+                                           (AvStream.AvalonStream dom 0 1 1 1 Int)
+  ckt = Circuit (fifo (Proxy @(_,_,Int)) Proxy (C.SNat @10) () 0)
+
+prop_avalonstream_avalonmm_fifo_id :: Property
+prop_avalonstream_avalonmm_fifo_id = propWithModelSingleDomain
+                                     @C.System
+                                     defExpectOptions
+                                     (DfTest.genData DfTest.genSmallInt)
+                                     (C.exposeClockResetEnable id)
+                                     (C.exposeClockResetEnable @C.System ckt)
+                                     (\a b -> tally a === tally b)
+  where
+  ckt :: (C.HiddenClockResetEnable dom) => Circuit
+                                           (AvStream.AvalonStream dom 0 1 1 1 Int)
+                                           (MM.AvalonMM dom
+                                             ('MM.AvalonMMS2MConfig 'True 'True 'True 'True 'True 'True) () 
+                                             ('MM.AvalonMMM2SConfig 'True 1 'True 'True 1 1 'True 1 'True) Int)
   ckt = Circuit (fifo (Proxy @(_,_,Int)) Proxy (C.SNat @10) () ())
 
 
