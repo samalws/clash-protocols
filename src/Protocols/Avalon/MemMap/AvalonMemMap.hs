@@ -8,7 +8,7 @@ module Protocols.Avalon.MemMap.AvalonMemMap where
 
 -- base
 import           Control.DeepSeq (NFData)
-import           Prelude hiding (not, (&&), repeat)
+import           Prelude hiding (not, (&&), repeat, (!!))
 
 import qualified Data.Maybe as Maybe
 import           Data.Proxy
@@ -308,6 +308,8 @@ data AvalonMM
 
 avalonInterconnectFabric ::
   ( HiddenClockResetEnable dom
+  , KnownNat nMaster
+  , KnownNat nSlave
   , GoodMMSharedConfig sharedConfigM
   , GoodMMSharedConfig sharedConfigS
   , GoodMMMasterConfig masterConfig
@@ -317,36 +319,67 @@ avalonInterconnectFabric ::
   -- , ByteEnableWidth sharedConfigM ~ WriteByteEnableWidth slaveConfig -- TODO or writebyteenablewidth == 0
   , BurstCountWidth sharedConfigM ~ BurstCountWidth sharedConfigS
   )
-  => (Unsigned (AddrWidth sharedConfigM) -> Bool)
-  -> Unsigned (IrqNumberWidth masterConfig)
-  -> Signal dom (AvalonMasterOut sharedConfigM masterConfig writeDataType,
-                 AvalonSlaveOut  sharedConfigS slaveConfig  readDataType)
-  -> Signal dom (AvalonMasterIn  sharedConfigM masterConfig readDataType,
-                 AvalonSlaveIn   sharedConfigS slaveConfig  writeDataType)
-avalonInterconnectFabric slaveAddrFn irqNum inps = mealy transFn s0 inps where
-  s0 = ()
-  transFn () (mo, so) = ((), (convSoMi so, convMoSi mo))
+  => Vec nSlave (Unsigned (AddrWidth sharedConfigM) -> Bool)
+  -> Vec nSlave (Unsigned (IrqNumberWidth masterConfig))
+  -> (Vec nMaster (Signal dom (AvalonMasterOut sharedConfigM masterConfig writeDataType)),
+      Vec nSlave  (Signal dom (AvalonSlaveOut  sharedConfigS slaveConfig  readDataType)))
+  -> (Vec nMaster (Signal dom (AvalonMasterIn  sharedConfigM masterConfig readDataType)),
+      Vec nSlave  (Signal dom (AvalonSlaveIn   sharedConfigS slaveConfig  writeDataType)))
+avalonInterconnectFabric slaveAddrFns irqNums (inpA, inpB) = (unbundle otpA, unbundle otpB) where
+  (otpA, otpB) = unbundle $ mealy transFn s0 $ bundle (bundle inpA, bundle inpB)
 
-  convSoMi so
+  s0 = ()
+  transFn () (mo, so) = let (ms, sm) = masterSlavePairings mo in ((), (maybe blankMi (\n -> convSoMi (so !! n) (irqNums !! n)) <$> ms, maybe blankSi (convMoSi . (mo !!)) <$> sm))
+
+  -- TODO what if 2 masters put in same slave addr
+  masterSlavePairings mo = ((\moMsg -> findIndex ($ mo_addr moMsg) slaveAddrFns) <$> mo, (\addrFn -> findIndex (addrFn . mo_addr) mo) <$> slaveAddrFns)
+
+  convSoMi so irqNum
     = AvalonMasterIn
     { mi_waitRequest   = convKeepBool False (so_waitRequest so) -- TODO
     , mi_readDataValid = convKeepBool False (so_readDataValid so)
     , mi_endOfPacket   = convKeepBool False (so_endOfPacket so)
     , mi_irq           = convKeepBool False (so_irq so)
-    , mi_irqNumber     = if (fromKeepBool False (so_irq so)) then irqNum else 0
+    , mi_irqNumber     = if (fromKeepBool False (so_irq so)) then irqNum else 0 -- TODO what if someone else's irq is on
     , mi_readData      = so_readData so
     }
 
   convMoSi mo
     =  AvalonSlaveIn
     { si_addr               = mo_addr mo
-    , si_read               = toKeepBool $ fromKeepBool True (mo_read  mo) && not (fromKeepBool False (mo_write mo)) && slaveAddrFn (mo_addr mo)
-    , si_write              = toKeepBool $ fromKeepBool True (mo_write mo) && not (fromKeepBool False (mo_read  mo)) && slaveAddrFn (mo_addr mo)
+    , si_read               = toKeepBool $ fromKeepBool True (mo_read  mo) && not (fromKeepBool False (mo_write mo))
+    , si_write              = toKeepBool $ fromKeepBool True (mo_write mo) && not (fromKeepBool False (mo_read  mo))
     , si_writeByteEnable    = resize $ if (fromKeepBool True (mo_write mo)) then mo_byteEnable mo else 0
     , si_burstCount         = mo_burstCount mo
-    , si_chipSelect         = slaveAddrFn (mo_addr mo)
+    , si_chipSelect         = toKeepBool True
     , si_byteEnable         = mo_byteEnable mo
     , si_beginTransfer      = errorX "TODO"
     , si_beginBurstTransfer = errorX "TODO"
     , si_writeData          = mo_writeData mo
     }
+
+blankMi :: (GoodMMSharedConfig sharedConfig, GoodMMMasterConfig masterConfig) => AvalonMasterIn sharedConfig masterConfig writeDataType
+blankMi
+  = AvalonMasterIn
+  { mi_waitRequest   = toKeepBool False
+  , mi_readDataValid = toKeepBool False
+  , mi_endOfPacket   = toKeepBool False
+  , mi_irq           = toKeepBool False
+  , mi_irqNumber     = 0
+  , mi_readData      = errorX "No read data defined"
+  }
+
+blankSi :: (GoodMMSharedConfig sharedConfig, GoodMMSlaveConfig slaveConfig) => AvalonSlaveIn sharedConfig slaveConfig writeDataType
+blankSi
+  =  AvalonSlaveIn
+  { si_addr               = 0
+  , si_read               = toKeepBool False
+  , si_write              = toKeepBool False
+  , si_writeByteEnable    = 0
+  , si_burstCount         = 0
+  , si_chipSelect         = toKeepBool False
+  , si_byteEnable         = 0
+  , si_beginTransfer      = toKeepBool False
+  , si_beginBurstTransfer = toKeepBool False
+  , si_writeData          = errorX "No write data defined"
+  }
