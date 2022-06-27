@@ -63,8 +63,7 @@ data AvalonMMSharedConfig
 
 data AvalonMMSlaveConfig
   =  AvalonMMSlaveConfig
-  { keepChipSelect         :: Bool
-  , writeByteEnableWidth   :: Nat
+  { writeByteEnableWidth   :: Nat
   , keepBeginTransfer      :: Bool
   , keepBeginBurstTransfer :: Bool
   , keepReadyForData       :: Bool
@@ -73,8 +72,8 @@ data AvalonMMSlaveConfig
 
 data AvalonMMMasterConfig
   =  AvalonMMMasterConfig
-  { keepFlush     :: Bool
-  , keepIrqNumber :: Bool
+  { keepFlush      :: Bool
+  , irqNumberWidth :: Nat
   }
 
 
@@ -106,30 +105,27 @@ type family KeepIrq (c :: AvalonMMSharedConfig) where
   KeepIrq ('AvalonMMSharedConfig _ _ _ _ _ _ _ _ a) = a
 
 
-type family KeepChipSelect (c :: AvalonMMSlaveConfig) where
-  KeepChipSelect ('AvalonMMSlaveConfig a _ _ _ _ _) = a
-
 type family WriteByteEnableWidth (c :: AvalonMMSlaveConfig) where
-  WriteByteEnableWidth ('AvalonMMSlaveConfig _ a _ _ _ _) = a
+  WriteByteEnableWidth ('AvalonMMSlaveConfig a _ _ _ _) = a
 
 type family KeepBeginTransfer (c :: AvalonMMSlaveConfig) where
-  KeepBeginTransfer ('AvalonMMSlaveConfig _ _ a _ _ _) = a
+  KeepBeginTransfer ('AvalonMMSlaveConfig _ a _ _ _) = a
 
 type family KeepBeginBurstTransfer (c :: AvalonMMSlaveConfig) where
-  KeepBeginBurstTransfer ('AvalonMMSlaveConfig _ _ _ a _ _) = a
+  KeepBeginBurstTransfer ('AvalonMMSlaveConfig _ _ a _ _) = a
 
 type family KeepReadyForData (c :: AvalonMMSlaveConfig) where
-  KeepReadyForData ('AvalonMMSlaveConfig _ _ _ _ a _) = a
+  KeepReadyForData ('AvalonMMSlaveConfig _ _ _ a _) = a
 
 type family KeepDataAvailable (c :: AvalonMMSlaveConfig) where
-  KeepDataAvailable ('AvalonMMSlaveConfig _ _ _ _ _ a) = a
+  KeepDataAvailable ('AvalonMMSlaveConfig _ _ _ _ a) = a
 
 
 type family KeepFlush (c :: AvalonMMMasterConfig) where
   KeepFlush ('AvalonMMMasterConfig a _) = a
 
-type family KeepIrqNumber (c :: AvalonMMMasterConfig) where
-  KeepIrqNumber ('AvalonMMMasterConfig _ a) = a
+type family IrqNumberWidth (c :: AvalonMMMasterConfig) where
+  IrqNumberWidth ('AvalonMMMasterConfig _ a) = a
 
 
 class
@@ -156,16 +152,14 @@ instance
   ) => GoodMMSharedConfig config
 
 class
-  ( KeepBoolClass (KeepChipSelect         config)
-  , KnownNat      (WriteByteEnableWidth   config)
+  ( KnownNat      (WriteByteEnableWidth   config)
   , KeepBoolClass (KeepBeginTransfer      config)
   , KeepBoolClass (KeepBeginBurstTransfer config)
   , KeepBoolClass (KeepReadyForData       config)
   , KeepBoolClass (KeepDataAvailable      config)
   ) => GoodMMSlaveConfig config
 instance
-  ( KeepBoolClass (KeepChipSelect         config)
-  , KnownNat      (WriteByteEnableWidth   config)
+  ( KnownNat      (WriteByteEnableWidth   config)
   , KeepBoolClass (KeepBeginTransfer      config)
   , KeepBoolClass (KeepBeginBurstTransfer config)
   , KeepBoolClass (KeepReadyForData       config)
@@ -173,12 +167,12 @@ instance
   ) => GoodMMSlaveConfig config
 
 class
-  ( KeepBoolClass (KeepFlush     config)
-  , KeepBoolClass (KeepIrqNumber config)
+  ( KeepBoolClass (KeepFlush      config)
+  , KnownNat      (IrqNumberWidth config)
   ) => GoodMMMasterConfig config
 instance
-  ( KeepBoolClass (KeepFlush     config)
-  , KeepBoolClass (KeepIrqNumber config)
+  ( KeepBoolClass (KeepFlush      config)
+  , KnownNat      (IrqNumberWidth config)
   ) => GoodMMMasterConfig config
 
 
@@ -218,7 +212,7 @@ data AvalonMasterIn sharedConfig masterConfig readDataType
   , mi_readDataValid :: KeepBool (KeepReadDataValid sharedConfig)
   , mi_endOfPacket   :: KeepBool (KeepEndOfPacket   sharedConfig)
   , mi_irq           :: KeepBool (KeepIrq           sharedConfig)
-  , mi_irqNumber     :: KeepBool (KeepIrqNumber     masterConfig) -- TODO
+  , mi_irqNumber     :: Unsigned (IrqNumberWidth    masterConfig)
   , mi_readData      :: readDataType
   }
   deriving Generic
@@ -276,7 +270,7 @@ data AvalonSlaveIn sharedConfig slaveConfig writeDataType
   , si_write              :: KeepBool (KeepWrite              sharedConfig)
   , si_byteEnable         :: Unsigned (ByteEnableWidth        sharedConfig)
   , si_burstCount         :: Unsigned (BurstCountWidth        sharedConfig)
-  , si_chipSelect         :: KeepBool (KeepChipSelect         slaveConfig)
+  , si_chipSelect         :: Bool
   , si_writeByteEnable    :: Unsigned (WriteByteEnableWidth   slaveConfig)
   , si_beginTransfer      :: KeepBool (KeepBeginTransfer      slaveConfig)
   , si_beginBurstTransfer :: KeepBool (KeepBeginBurstTransfer slaveConfig)
@@ -320,36 +314,37 @@ avalonInterconnectFabric ::
   , GoodMMSlaveConfig  slaveConfig
   , AddrWidth sharedConfigM ~ AddrWidth sharedConfigS
   , ByteEnableWidth sharedConfigM ~ ByteEnableWidth sharedConfigS
-  , ByteEnableWidth sharedConfigM ~ WriteByteEnableWidth slaveConfig
+  -- , ByteEnableWidth sharedConfigM ~ WriteByteEnableWidth slaveConfig -- TODO or writebyteenablewidth == 0
   , BurstCountWidth sharedConfigM ~ BurstCountWidth sharedConfigS
   )
-  => (Unsigned (AddrWidth sharedConfigM) -> KeepBool (KeepChipSelect slaveConfig))
+  => (Unsigned (AddrWidth sharedConfigM) -> Bool)
+  -> Unsigned (IrqNumberWidth masterConfig)
   -> Signal dom (AvalonMasterOut sharedConfigM masterConfig writeDataType,
                  AvalonSlaveOut  sharedConfigS slaveConfig  readDataType)
   -> Signal dom (AvalonMasterIn  sharedConfigM masterConfig readDataType,
                  AvalonSlaveIn   sharedConfigS slaveConfig  writeDataType)
-avalonInterconnectFabric slaveAddrFn inps = mealy transFn s0 inps where
+avalonInterconnectFabric slaveAddrFn irqNum inps = mealy transFn s0 inps where
   s0 = ()
   transFn () (mo, so) = ((), (convSoMi so, convMoSi mo))
 
   convSoMi so
     = AvalonMasterIn
     { mi_waitRequest   = convKeepBool False (so_waitRequest so) -- TODO
-    , mi_readDataValid = errorX "TODO"
+    , mi_readDataValid = convKeepBool False (so_readDataValid so)
     , mi_endOfPacket   = convKeepBool False (so_endOfPacket so)
     , mi_irq           = convKeepBool False (so_irq so)
-    , mi_irqNumber     = convKeepBool False (so_irq so) -- TODO
+    , mi_irqNumber     = if (fromKeepBool False (so_irq so)) then irqNum else 0
     , mi_readData      = so_readData so
     }
 
   convMoSi mo
     =  AvalonSlaveIn
     { si_addr               = mo_addr mo
-    , si_read               = convKeepBool False (mo_read mo) -- TODO
-    , si_write              = convKeepBool False (mo_write mo) -- TODO
-    , si_writeByteEnable    = mo_byteEnable mo -- TODO
+    , si_read               = toKeepBool $ fromKeepBool True (mo_read  mo) && not (fromKeepBool False (mo_write mo)) && slaveAddrFn (mo_addr mo)
+    , si_write              = toKeepBool $ fromKeepBool True (mo_write mo) && not (fromKeepBool False (mo_read  mo)) && slaveAddrFn (mo_addr mo)
+    , si_writeByteEnable    = resize $ if (fromKeepBool True (mo_write mo)) then mo_byteEnable mo else 0
     , si_burstCount         = mo_burstCount mo
-    , si_chipSelect         = slaveAddrFn (mo_addr mo) -- TODO?
+    , si_chipSelect         = slaveAddrFn (mo_addr mo)
     , si_byteEnable         = mo_byteEnable mo
     , si_beginTransfer      = errorX "TODO"
     , si_beginBurstTransfer = errorX "TODO"
