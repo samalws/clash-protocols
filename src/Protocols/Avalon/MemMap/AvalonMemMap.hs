@@ -44,258 +44,314 @@ instance KeepBoolClass 'False where
   fromKeepBool b = const b
   toKeepBool = const ()
 
+convKeepBool :: (KeepBoolClass a, KeepBoolClass b) => Bool -> KeepBool a -> KeepBool b
+convKeepBool b = toKeepBool . fromKeepBool b
 
-data AvalonMMM2SConfig
-  = AvalonMMM2SConfig
+
+data AvalonMMSharedConfig
+  =  AvalonMMSharedConfig
+  { addrWidth            :: Nat
+  , keepRead             :: Bool
+  , keepWrite            :: Bool
+  , byteEnableWidth      :: Nat
+  , burstCountWidth      :: Nat
+  , keepWaitRequest      :: Bool
+  , keepReadDataValid    :: Bool
+  , keepEndOfPacket      :: Bool
+  , keepIrq              :: Bool
+  }
+
+data AvalonMMSlaveConfig
+  =  AvalonMMSlaveConfig
   { keepChipSelect         :: Bool
-  , addrWidth              :: Nat
-  , keepRead               :: Bool
-  , keepWrite              :: Bool
-  , byteEnableWidth        :: Nat
   , writeByteEnableWidth   :: Nat
   , keepBeginTransfer      :: Bool
-  , burstCountWidth        :: Nat
   , keepBeginBurstTransfer :: Bool
+  , keepReadyForData       :: Bool
+  , keepDataAvailable      :: Bool
   }
 
-type family KeepChipSelect (c :: AvalonMMM2SConfig) where
-  KeepChipSelect ('AvalonMMM2SConfig a _ _ _ _ _ _ _ _) = a
-
-type family AddrWidth (c :: AvalonMMM2SConfig) where
-  AddrWidth ('AvalonMMM2SConfig _ a _ _ _ _ _ _ _) = a
-
-type family KeepRead (c :: AvalonMMM2SConfig) where
-  KeepRead ('AvalonMMM2SConfig _ _ a _ _ _ _ _ _) = a
-
-type family KeepWrite (c :: AvalonMMM2SConfig) where
-  KeepWrite ('AvalonMMM2SConfig _ _ _ a _ _ _ _ _) = a
-
-type family ByteEnableWidth (c :: AvalonMMM2SConfig) where
-  ByteEnableWidth ('AvalonMMM2SConfig _ _ _ _ a _ _ _ _) = a
-
-type family WriteByteEnableWidth (c :: AvalonMMM2SConfig) where
-  WriteByteEnableWidth ('AvalonMMM2SConfig _ _ _ _ _ a _ _ _) = a
-
-type family KeepBeginTransfer (c :: AvalonMMM2SConfig) where
-  KeepBeginTransfer ('AvalonMMM2SConfig _ _ _ _ _ _ a _ _) = a
-
-type family BurstCountWidth (c :: AvalonMMM2SConfig) where
-  BurstCountWidth ('AvalonMMM2SConfig _ _ _ _ _ _ _ a _) = a
-
-type family KeepBeginBurstTransfer (c :: AvalonMMM2SConfig) where
-  KeepBeginBurstTransfer ('AvalonMMM2SConfig _ _ _ _ _ _ _ _ a) = a
-
-
-class (KeepBoolClass (KeepChipSelect config), KnownNat (AddrWidth config), KeepBoolClass (KeepRead config), KeepBoolClass (KeepWrite config), KnownNat (ByteEnableWidth config), KnownNat (WriteByteEnableWidth config), KeepBoolClass (KeepBeginTransfer config), KnownNat (BurstCountWidth config), KeepBoolClass (KeepBeginBurstTransfer config)) => GoodMMM2SConfig config
-instance (KeepBoolClass (KeepChipSelect config), KnownNat (AddrWidth config), KeepBoolClass (KeepRead config), KeepBoolClass (KeepWrite config), KnownNat (ByteEnableWidth config), KnownNat (WriteByteEnableWidth config), KeepBoolClass (KeepBeginTransfer config), KnownNat (BurstCountWidth config), KeepBoolClass (KeepBeginBurstTransfer config)) => GoodMMM2SConfig config
-
-
-data AvalonMMS2MConfig
-  = AvalonMMS2MConfig
-  { keepWaitRequest   :: Bool
-  , keepReadDataValid :: Bool
-  , keepReadyForData  :: Bool
-  , keepDataAvailable :: Bool
-  , keepEndOfPacket   :: Bool
-  , keepIrq           :: Bool
+data AvalonMMMasterConfig
+  =  AvalonMMMasterConfig
+  { keepFlush     :: Bool
+  , keepIrqNumber :: Bool
   }
 
-type family KeepWaitRequest (c :: AvalonMMS2MConfig) where
-  KeepWaitRequest ('AvalonMMS2MConfig a _ _ _ _ _) = a
 
-type family KeepReadDataValid (c :: AvalonMMS2MConfig) where
-  KeepReadDataValid ('AvalonMMS2MConfig _ a _ _ _ _) = a
+type family AddrWidth (c :: AvalonMMSharedConfig) where
+  AddrWidth ('AvalonMMSharedConfig a _ _ _ _ _ _ _ _) = a
 
-type family KeepReadyForData (c :: AvalonMMS2MConfig) where
-  KeepReadyForData ('AvalonMMS2MConfig _ _ a _ _ _) = a
+type family KeepRead (c :: AvalonMMSharedConfig) where
+  KeepRead ('AvalonMMSharedConfig _ a _ _ _ _ _ _ _) = a
 
-type family KeepDataAvailable (c :: AvalonMMS2MConfig) where
-  KeepDataAvailable ('AvalonMMS2MConfig _ _ _ a _ _) = a
+type family KeepWrite (c :: AvalonMMSharedConfig) where
+  KeepWrite ('AvalonMMSharedConfig _ _ a _ _ _ _ _ _) = a
 
-type family KeepEndOfPacket (c :: AvalonMMS2MConfig) where
-  KeepEndOfPacket ('AvalonMMS2MConfig _ _ _ _ a _) = a
+type family ByteEnableWidth (c :: AvalonMMSharedConfig) where
+  ByteEnableWidth ('AvalonMMSharedConfig _ _ _ a _ _ _ _ _) = a
 
-type family KeepIrq (c :: AvalonMMS2MConfig) where
-  KeepIrq ('AvalonMMS2MConfig _ _ _ _ _ a) = a
+type family BurstCountWidth (c :: AvalonMMSharedConfig) where
+  BurstCountWidth ('AvalonMMSharedConfig _ _ _ _ a _ _ _ _) = a
+
+type family KeepWaitRequest (c :: AvalonMMSharedConfig) where
+  KeepWaitRequest ('AvalonMMSharedConfig _ _ _ _ _ a _ _ _) = a
+
+type family KeepReadDataValid (c :: AvalonMMSharedConfig) where
+  KeepReadDataValid ('AvalonMMSharedConfig _ _ _ _ _ _ a _ _) = a
+
+type family KeepEndOfPacket (c :: AvalonMMSharedConfig) where
+  KeepEndOfPacket ('AvalonMMSharedConfig _ _ _ _ _ _ _ a _) = a
+
+type family KeepIrq (c :: AvalonMMSharedConfig) where
+  KeepIrq ('AvalonMMSharedConfig _ _ _ _ _ _ _ _ a) = a
 
 
-class (KeepBoolClass (KeepWaitRequest config), KeepBoolClass (KeepReadDataValid config), KeepBoolClass (KeepReadyForData config), KeepBoolClass (KeepDataAvailable config), KeepBoolClass (KeepEndOfPacket config), KeepBoolClass (KeepIrq config)) => GoodMMS2MConfig config
-instance (KeepBoolClass (KeepWaitRequest config), KeepBoolClass (KeepReadDataValid config), KeepBoolClass (KeepReadyForData config), KeepBoolClass (KeepDataAvailable config), KeepBoolClass (KeepEndOfPacket config), KeepBoolClass (KeepIrq config)) => GoodMMS2MConfig config
+type family KeepChipSelect (c :: AvalonMMSlaveConfig) where
+  KeepChipSelect ('AvalonMMSlaveConfig a _ _ _ _ _) = a
+
+type family WriteByteEnableWidth (c :: AvalonMMSlaveConfig) where
+  WriteByteEnableWidth ('AvalonMMSlaveConfig _ a _ _ _ _) = a
+
+type family KeepBeginTransfer (c :: AvalonMMSlaveConfig) where
+  KeepBeginTransfer ('AvalonMMSlaveConfig _ _ a _ _ _) = a
+
+type family KeepBeginBurstTransfer (c :: AvalonMMSlaveConfig) where
+  KeepBeginBurstTransfer ('AvalonMMSlaveConfig _ _ _ a _ _) = a
+
+type family KeepReadyForData (c :: AvalonMMSlaveConfig) where
+  KeepReadyForData ('AvalonMMSlaveConfig _ _ _ _ a _) = a
+
+type family KeepDataAvailable (c :: AvalonMMSlaveConfig) where
+  KeepDataAvailable ('AvalonMMSlaveConfig _ _ _ _ _ a) = a
 
 
--- | Data sent from master to slave.
-data AvalonMMM2S config writeDataType
-  = AvalonMMM2S
-  { _chipSelect         :: KeepBool (KeepChipSelect  config)
-  , _addr               :: Unsigned (AddrWidth       config)
-  , _read               :: KeepBool (KeepRead        config)
-  , _write              :: KeepBool (KeepWrite       config)
-  , _byteEnable         :: Vec (ByteEnableWidth      config) Bool
-  , _writeByteEnable    :: Vec (WriteByteEnableWidth config) Bool
-  , _beginTransfer      :: KeepBool (KeepBeginTransfer      config)
-  , _burstCount         :: Unsigned (BurstCountWidth        config)
-  , _beginBurstTransfer :: KeepBool (KeepBeginBurstTransfer config)
-  , _writeData          :: writeDataType
+type family KeepFlush (c :: AvalonMMMasterConfig) where
+  KeepFlush ('AvalonMMMasterConfig a _) = a
+
+type family KeepIrqNumber (c :: AvalonMMMasterConfig) where
+  KeepIrqNumber ('AvalonMMMasterConfig _ a) = a
+
+
+class
+  ( KnownNat      (AddrWidth         config)
+  , KeepBoolClass (KeepRead          config)
+  , KeepBoolClass (KeepWrite         config)
+  , KnownNat      (ByteEnableWidth   config)
+  , KnownNat      (BurstCountWidth   config)
+  , KeepBoolClass (KeepWaitRequest   config)
+  , KeepBoolClass (KeepReadDataValid config)
+  , KeepBoolClass (KeepEndOfPacket   config)
+  , KeepBoolClass (KeepIrq           config)
+  ) => GoodMMSharedConfig config
+instance
+  ( KnownNat      (AddrWidth         config)
+  , KeepBoolClass (KeepRead          config)
+  , KeepBoolClass (KeepWrite         config)
+  , KnownNat      (ByteEnableWidth   config)
+  , KnownNat      (BurstCountWidth   config)
+  , KeepBoolClass (KeepWaitRequest   config)
+  , KeepBoolClass (KeepReadDataValid config)
+  , KeepBoolClass (KeepEndOfPacket   config)
+  , KeepBoolClass (KeepIrq           config)
+  ) => GoodMMSharedConfig config
+
+class
+  ( KeepBoolClass (KeepChipSelect         config)
+  , KnownNat      (WriteByteEnableWidth   config)
+  , KeepBoolClass (KeepBeginTransfer      config)
+  , KeepBoolClass (KeepBeginBurstTransfer config)
+  , KeepBoolClass (KeepReadyForData       config)
+  , KeepBoolClass (KeepDataAvailable      config)
+  ) => GoodMMSlaveConfig config
+instance
+  ( KeepBoolClass (KeepChipSelect         config)
+  , KnownNat      (WriteByteEnableWidth   config)
+  , KeepBoolClass (KeepBeginTransfer      config)
+  , KeepBoolClass (KeepBeginBurstTransfer config)
+  , KeepBoolClass (KeepReadyForData       config)
+  , KeepBoolClass (KeepDataAvailable      config)
+  ) => GoodMMSlaveConfig config
+
+class
+  ( KeepBoolClass (KeepFlush     config)
+  , KeepBoolClass (KeepIrqNumber config)
+  ) => GoodMMMasterConfig config
+instance
+  ( KeepBoolClass (KeepFlush     config)
+  , KeepBoolClass (KeepIrqNumber config)
+  ) => GoodMMMasterConfig config
+
+
+data AvalonMasterOut sharedConfig masterConfig writeDataType
+  =  AvalonMasterOut
+  { mo_addr        :: Unsigned (AddrWidth       sharedConfig)
+  , mo_read        :: KeepBool (KeepRead        sharedConfig)
+  , mo_write       :: KeepBool (KeepWrite       sharedConfig)
+  , mo_byteEnable  :: Unsigned (ByteEnableWidth sharedConfig)
+  , mo_burstCount  :: Unsigned (BurstCountWidth sharedConfig)
+  , mo_waitRequest :: KeepBool (KeepWaitRequest sharedConfig)
+  , mo_flush       :: KeepBool (KeepFlush       masterConfig)
+  , mo_writeData   :: writeDataType
   }
   deriving Generic
 
-deriving instance (GoodMMM2SConfig config, NFDataX writeDataType) => NFDataX (AvalonMMM2S config writeDataType)
-deriving instance (GoodMMM2SConfig config, NFData  writeDataType) => NFData  (AvalonMMM2S config writeDataType)
-deriving instance (GoodMMM2SConfig config, ShowX   writeDataType) => ShowX   (AvalonMMM2S config writeDataType)
-deriving instance (GoodMMM2SConfig config, Show    writeDataType) => Show    (AvalonMMM2S config writeDataType)
-deriving instance (GoodMMM2SConfig config, Eq      writeDataType) => Eq      (AvalonMMM2S config writeDataType)
+deriving instance (GoodMMSharedConfig sharedConfig,
+                   GoodMMMasterConfig masterConfig,
+                   NFDataX            writeDataType) => NFDataX (AvalonMasterOut sharedConfig masterConfig writeDataType)
+deriving instance (GoodMMSharedConfig sharedConfig,
+                   GoodMMMasterConfig masterConfig,
+                   NFData             writeDataType) => NFData  (AvalonMasterOut sharedConfig masterConfig writeDataType)
+deriving instance (GoodMMSharedConfig sharedConfig,
+                   GoodMMMasterConfig masterConfig,
+                   ShowX              writeDataType) => ShowX   (AvalonMasterOut sharedConfig masterConfig writeDataType)
+deriving instance (GoodMMSharedConfig sharedConfig,
+                   GoodMMMasterConfig masterConfig,
+                   Show               writeDataType) => Show    (AvalonMasterOut sharedConfig masterConfig writeDataType)
+deriving instance (GoodMMSharedConfig sharedConfig,
+                   GoodMMMasterConfig masterConfig,
+                   Eq                 writeDataType) => Eq      (AvalonMasterOut sharedConfig masterConfig writeDataType)
 
--- | Data sent from slave to master.
-data AvalonMMS2M config readDataType
-  = AvalonMMS2M
-  { _waitRequest   :: KeepBool (KeepWaitRequest   config)
-  , _readDataValid :: KeepBool (KeepReadDataValid config)
-  , _readyForData  :: KeepBool (KeepReadyForData  config)
-  , _dataAvailable :: KeepBool (KeepDataAvailable config)
-  , _endOfPacket   :: KeepBool (KeepEndOfPacket   config)
-  , _irq           :: KeepBool (KeepIrq           config)
-  , _readData      :: readDataType
+
+data AvalonMasterIn sharedConfig masterConfig readDataType
+  =  AvalonMasterIn
+  { mi_waitRequest   :: KeepBool (KeepWaitRequest   sharedConfig)
+  , mi_readDataValid :: KeepBool (KeepReadDataValid sharedConfig)
+  , mi_endOfPacket   :: KeepBool (KeepEndOfPacket   sharedConfig)
+  , mi_irq           :: KeepBool (KeepIrq           sharedConfig)
+  , mi_irqNumber     :: KeepBool (KeepIrqNumber     masterConfig) -- TODO
+  , mi_readData      :: readDataType
   }
   deriving Generic
 
-deriving instance (GoodMMS2MConfig config, NFDataX readDataType) => NFDataX (AvalonMMS2M config readDataType)
-deriving instance (GoodMMS2MConfig config, NFData  readDataType) => NFData  (AvalonMMS2M config readDataType)
-deriving instance (GoodMMS2MConfig config, ShowX   readDataType) => ShowX   (AvalonMMS2M config readDataType)
-deriving instance (GoodMMS2MConfig config, Show    readDataType) => Show    (AvalonMMS2M config readDataType)
-deriving instance (GoodMMS2MConfig config, Eq      readDataType) => Eq      (AvalonMMS2M config readDataType)
+deriving instance (GoodMMSharedConfig sharedConfig,
+                   GoodMMMasterConfig masterConfig,
+                   NFDataX            readDataType) => NFDataX (AvalonMasterIn sharedConfig masterConfig readDataType)
+deriving instance (GoodMMSharedConfig sharedConfig,
+                   GoodMMMasterConfig masterConfig,
+                   NFData             readDataType) => NFData  (AvalonMasterIn sharedConfig masterConfig readDataType)
+deriving instance (GoodMMSharedConfig sharedConfig,
+                   GoodMMMasterConfig masterConfig,
+                   ShowX              readDataType) => ShowX   (AvalonMasterIn sharedConfig masterConfig readDataType)
+deriving instance (GoodMMSharedConfig sharedConfig,
+                   GoodMMMasterConfig masterConfig,
+                   Show               readDataType) => Show    (AvalonMasterIn sharedConfig masterConfig readDataType)
+deriving instance (GoodMMSharedConfig sharedConfig,
+                   GoodMMMasterConfig masterConfig,
+                   Eq                 readDataType) => Eq      (AvalonMasterIn sharedConfig masterConfig readDataType)
+
+
+data AvalonSlaveOut sharedConfig slaveConfig readDataType
+  =  AvalonSlaveOut
+  { so_waitRequest        :: KeepBool (KeepWaitRequest   sharedConfig)
+  , so_readDataValid      :: KeepBool (KeepReadDataValid sharedConfig)
+  , so_endOfPacket        :: KeepBool (KeepEndOfPacket   sharedConfig)
+  , so_irq                :: KeepBool (KeepIrq           sharedConfig)
+  , so_readyForData       :: KeepBool (KeepReadyForData  slaveConfig)
+  , so_dataAvailable      :: KeepBool (KeepDataAvailable slaveConfig)
+  , so_readData           :: readDataType
+  }
+  deriving Generic
+
+deriving instance (GoodMMSharedConfig sharedConfig,
+                   GoodMMSlaveConfig  slaveConfig,
+                   NFDataX            readDataType) => NFDataX (AvalonSlaveOut sharedConfig slaveConfig readDataType)
+deriving instance (GoodMMSharedConfig sharedConfig,
+                   GoodMMSlaveConfig  slaveConfig,
+                   NFData             readDataType) => NFData  (AvalonSlaveOut sharedConfig slaveConfig readDataType)
+deriving instance (GoodMMSharedConfig sharedConfig,
+                   GoodMMSlaveConfig  slaveConfig,
+                   ShowX              readDataType) => ShowX   (AvalonSlaveOut sharedConfig slaveConfig readDataType)
+deriving instance (GoodMMSharedConfig sharedConfig,
+                   GoodMMSlaveConfig  slaveConfig,
+                   Show               readDataType) => Show    (AvalonSlaveOut sharedConfig slaveConfig readDataType)
+deriving instance (GoodMMSharedConfig sharedConfig,
+                   GoodMMSlaveConfig  slaveConfig,
+                   Eq                 readDataType) => Eq      (AvalonSlaveOut sharedConfig slaveConfig readDataType)
+
+
+data AvalonSlaveIn sharedConfig slaveConfig writeDataType
+  =  AvalonSlaveIn
+  { si_addr               :: Unsigned (AddrWidth              sharedConfig)
+  , si_read               :: KeepBool (KeepRead               sharedConfig)
+  , si_write              :: KeepBool (KeepWrite              sharedConfig)
+  , si_byteEnable         :: Unsigned (ByteEnableWidth        sharedConfig)
+  , si_burstCount         :: Unsigned (BurstCountWidth        sharedConfig)
+  , si_chipSelect         :: KeepBool (KeepChipSelect         slaveConfig)
+  , si_writeByteEnable    :: Unsigned (WriteByteEnableWidth   slaveConfig)
+  , si_beginTransfer      :: KeepBool (KeepBeginTransfer      slaveConfig)
+  , si_beginBurstTransfer :: KeepBool (KeepBeginBurstTransfer slaveConfig)
+  , si_writeData          :: writeDataType
+  }
+  deriving Generic
+
+deriving instance (GoodMMSharedConfig sharedConfig,
+                   GoodMMSlaveConfig  slaveConfig,
+                   NFDataX            writeDataType) => NFDataX (AvalonSlaveIn sharedConfig slaveConfig writeDataType)
+deriving instance (GoodMMSharedConfig sharedConfig,
+                   GoodMMSlaveConfig  slaveConfig,
+                   NFData             writeDataType) => NFData  (AvalonSlaveIn sharedConfig slaveConfig writeDataType)
+deriving instance (GoodMMSharedConfig sharedConfig,
+                   GoodMMSlaveConfig  slaveConfig,
+                   ShowX              writeDataType) => ShowX   (AvalonSlaveIn sharedConfig slaveConfig writeDataType)
+deriving instance (GoodMMSharedConfig sharedConfig,
+                   GoodMMSlaveConfig  slaveConfig,
+                   Show               writeDataType) => Show    (AvalonSlaveIn sharedConfig slaveConfig writeDataType)
+deriving instance (GoodMMSharedConfig sharedConfig,
+                   GoodMMSlaveConfig  slaveConfig,
+                   Eq                 writeDataType) => Eq      (AvalonSlaveIn sharedConfig slaveConfig writeDataType)
 
 
 -- | Type for Avalon memory mapped protocol.
 -- We do not support the bidirectional port @data@
-data AvalonMM (dom :: Domain) (configS2M :: AvalonMMS2MConfig) (readDataType :: Type) (configM2S :: AvalonMMM2SConfig) (writeDataType :: Type)
+data AvalonMM
+     (dom           :: Domain)
+     (sharedConfig  :: AvalonMMSharedConfig)
+     (masterConfig  :: AvalonMMMasterConfig)
+     (slaveConfig   :: AvalonMMSlaveConfig)
+     (readDataType  :: Type)
+     (writeDataType :: Type)
 
-instance Protocol (AvalonMM dom configS2M readDataType configM2S writeDataType) where
-  type Fwd (AvalonMM dom configS2M readDataType configM2S writeDataType) = Signal dom (AvalonMMM2S configM2S writeDataType)
-  type Bwd (AvalonMM dom configS2M readDataType configM2S writeDataType) = Signal dom (AvalonMMS2M configS2M readDataType)
 
-instance (KnownDomain dom, GoodMMS2MConfig configS2M, GoodMMM2SConfig configM2S) => Backpressure (AvalonMM dom configS2M readDataType configM2S writeDataType) where
-  boolsToBwd proxy = C.fromList_lazy . fmap (DfLike.boolToAck proxy)
+avalonInterconnectFabric ::
+  ( HiddenClockResetEnable dom
+  , GoodMMSharedConfig sharedConfigM
+  , GoodMMSharedConfig sharedConfigS
+  , GoodMMMasterConfig masterConfig
+  , GoodMMSlaveConfig  slaveConfig
+  , AddrWidth sharedConfigM ~ AddrWidth sharedConfigS
+  , ByteEnableWidth sharedConfigM ~ ByteEnableWidth sharedConfigS
+  , ByteEnableWidth sharedConfigM ~ WriteByteEnableWidth slaveConfig
+  , BurstCountWidth sharedConfigM ~ BurstCountWidth sharedConfigS
+  )
+  => (Unsigned (AddrWidth sharedConfigM) -> KeepBool (KeepChipSelect slaveConfig))
+  -> Signal dom (AvalonMasterOut sharedConfigM masterConfig writeDataType,
+                 AvalonSlaveOut  sharedConfigS slaveConfig  readDataType)
+  -> Signal dom (AvalonMasterIn  sharedConfigM masterConfig readDataType,
+                 AvalonSlaveIn   sharedConfigS slaveConfig  writeDataType)
+avalonInterconnectFabric slaveAddrFn inps = mealy transFn s0 inps where
+  s0 = ()
+  transFn () (mo, so) = ((), (convSoMi so, convMoSi mo))
 
-instance (KnownDomain dom, GoodMMS2MConfig configS2M, GoodMMM2SConfig configM2S) => Simulate (AvalonMM dom configS2M readDataType configM2S writeDataType) where
-  type SimulateFwdType (AvalonMM dom configS2M readDataType configM2S writeDataType) = [AvalonMMM2S configM2S writeDataType]
-  type SimulateBwdType (AvalonMM dom configS2M readDataType configM2S writeDataType) = [AvalonMMS2M configS2M readDataType]
-  type SimulateChannels (AvalonMM dom configS2M readDataType configM2S writeDataType) = 1
-
-  simToSigFwd _ = C.fromList_lazy
-  simToSigBwd _ = C.fromList_lazy
-  sigToSimFwd _ = C.sample_lazy
-  sigToSimBwd _ = C.sample_lazy
-
-  stallC conf (C.head -> (stallAck, stalls)) = DfLike.stall Proxy conf stallAck stalls
-
--- | Grab the data from a master-to-slave message, if there is any
-mmM2SToMaybe :: (GoodMMM2SConfig configM2S) => AvalonMMM2S configM2S writeDataType -> Maybe writeDataType
-mmM2SToMaybe AvalonMMM2S{..} = if cond then Just _writeData else Nothing where
-  cond =  fromKeepBool True _chipSelect
-       && fromKeepBool True _write
-       && not (fromKeepBool False _read)
-  -- TODO look at byteenable
-
-mmM2SNoData :: (GoodMMM2SConfig configM2S) => AvalonMMM2S configM2S writeDataType
-mmM2SNoData
-  = AvalonMMM2S
-  { _chipSelect         = toKeepBool False
-  , _addr               = 0
-  , _read               = toKeepBool False
-  , _write              = toKeepBool False
-  , _byteEnable         = repeat False
-  , _writeByteEnable    = repeat False
-  , _beginTransfer      = toKeepBool False
-  , _burstCount         = 0
-  , _beginBurstTransfer = toKeepBool False
-  , _writeData          = errorX "No writeData for noData"
-  }
-
-mmM2SSendingData :: (GoodMMM2SConfig configM2S) => AvalonMMM2S configM2S writeDataType
-mmM2SSendingData
-  = AvalonMMM2S
-  { _chipSelect         = toKeepBool True
-  , _addr               = 0
-  , _read               = toKeepBool False
-  , _write              = toKeepBool True
-  , _byteEnable         = repeat True
-  , _writeByteEnable    = repeat True
-  , _beginTransfer      = toKeepBool False
-  , _burstCount         = 0
-  , _beginBurstTransfer = toKeepBool False
-  , _writeData          = errorX "No writeData for mmM2SSendingData"
-  }
-
-boolToMMS2M :: (GoodMMS2MConfig configS2M) => Bool -> AvalonMMS2M configS2M readDataType
-boolToMMS2M ack
-  = AvalonMMS2M
-    { _waitRequest   = toKeepBool (not ack)
-    , _readDataValid = toKeepBool False
-    , _readyForData  = toKeepBool ack
-    , _dataAvailable = toKeepBool False
-    , _endOfPacket   = toKeepBool False
-    , _irq           = toKeepBool False
-    , _readData      = errorX "No readData for boolToAck"
+  convSoMi so
+    = AvalonMasterIn
+    { mi_waitRequest   = convKeepBool False (so_waitRequest so) -- TODO
+    , mi_readDataValid = errorX "TODO"
+    , mi_endOfPacket   = convKeepBool False (so_endOfPacket so)
+    , mi_irq           = convKeepBool False (so_irq so)
+    , mi_irqNumber     = convKeepBool False (so_irq so) -- TODO
+    , mi_readData      = so_readData so
     }
 
-mmS2MToBool :: (GoodMMS2MConfig configS2M) => AvalonMMS2M configS2M readDataType -> Bool
-mmS2MToBool AvalonMMS2M{..} = fromKeepBool True _readyForData && not (fromKeepBool False _waitRequest)
-
-instance (KnownDomain dom, GoodMMS2MConfig configS2M, GoodMMM2SConfig configM2S) => Drivable (AvalonMM dom configS2M readDataType configM2S writeDataType) where
-  type ExpectType (AvalonMM dom configS2M readDataType configM2S writeDataType) = [writeDataType]
-
-  -- | All the fields aside from @_data@ are left at zero/default values,
-  -- except for packet fields, which assume that this is an individual packet (start=end=True).
-  toSimulateType Proxy = fmap (\dat -> mmM2SSendingData { _writeData = dat })
-  fromSimulateType Proxy = Maybe.mapMaybe mmM2SToMaybe
-
-  driveC = DfLike.drive Proxy
-  sampleC = DfLike.sample Proxy
-
-instance (KnownDomain dom, GoodMMS2MConfig configS2M, GoodMMM2SConfig configM2S) => DfLike dom (AvalonMM dom configS2M readDataType configM2S) writeDataType where
-  type Data (AvalonMM dom configS2M readDataType configM2S) writeDataType = AvalonMMM2S configM2S writeDataType
-  type Payload writeDataType = writeDataType
-  type Ack (AvalonMM dom configS2M readDataType configM2S) writeDataType = AvalonMMS2M configS2M readDataType
-
-  getPayload = const $ mmM2SToMaybe
-
-  setPayload _ _ m2s (Just b) = m2s { _writeData = b }
-  setPayload _ pxy _ Nothing = DfLike.noData pxy
-
-  noData _ = mmM2SNoData
-
-  boolToAck _ = boolToMMS2M
-  ackToBool _ = mmS2MToBool
-
-instance (KnownDomain dom, GoodMMS2MConfig configS2M, GoodMMM2SConfig configM2S, Show writeDataType, ShowX writeDataType, NFData writeDataType, NFDataX writeDataType, Eq writeDataType, Show readDataType, ShowX readDataType, NFData readDataType, NFDataX readDataType, Eq readDataType) => Test (AvalonMM dom configS2M readDataType configM2S writeDataType) where
-  expectToLengths Proxy = pure . length
-
-  -- directly copied from Df instance, with minor changes made
-  expectN Proxy (ExpectOptions{eoEmptyTail, eoTimeout}) (C.head -> nExpected) sampled = do
-    go (Maybe.fromMaybe maxBound eoTimeout) nExpected sampled
-   where
-    catDatas [] = []
-    catDatas (m2s:xs) = Maybe.maybe (catDatas xs) (:catDatas xs) (mmM2SToMaybe m2s)
-
-    go _imeout _n [] =
-      -- This really should not happen, protocols should produce data indefinitely
-      error "unexpected end of signal"
-    go _imeout 0 rest = do
-      -- Check for superfluous output from protocol
-      case catDatas (take eoEmptyTail rest) of
-        [] -> pure (take nExpected (catDatas sampled))
-        superfluous ->
-          let err = "Circuit produced more output than expected:" in
-          failWith Nothing (err <> "\n\n" <> ppShow superfluous)
-    go timeout n _ | timeout <= 0 =
-      failWith Nothing $ concat
-        [ "Circuit did not produce enough output. Expected "
-        , show n, " more values. Sampled only " <> show (nExpected - n) <> ":\n\n"
-        , ppShow (take (nExpected - n) (catDatas sampled)) ]
-
-    go timeout n (a:as) | Maybe.isNothing (mmM2SToMaybe a) = do
-      -- Circuit did not output valid cycle, just continue
-      go (pred timeout) n as
-    go _ n (_:as) =
-      -- Circuit produced a valid cycle, reset timeout
-      go (Maybe.fromMaybe maxBound eoTimeout) (pred n) as
+  convMoSi mo
+    =  AvalonSlaveIn
+    { si_addr               = mo_addr mo
+    , si_read               = convKeepBool False (mo_read mo) -- TODO
+    , si_write              = convKeepBool False (mo_write mo) -- TODO
+    , si_writeByteEnable    = mo_byteEnable mo -- TODO
+    , si_burstCount         = mo_burstCount mo
+    , si_chipSelect         = slaveAddrFn (mo_addr mo) -- TODO?
+    , si_byteEnable         = mo_byteEnable mo
+    , si_beginTransfer      = errorX "TODO"
+    , si_beginBurstTransfer = errorX "TODO"
+    , si_writeData          = mo_writeData mo
+    }
