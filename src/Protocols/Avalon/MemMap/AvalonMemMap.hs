@@ -369,12 +369,11 @@ avalonInterconnectFabric ::
   )
   => Vec nSlave (Unsigned (AddrWidth (SShared slaveConfig)) -> Bool)
   -> Vec nSlave (Unsigned (IrqNumberWidth masterConfig))
-  -> (Vec nMaster (Signal dom (AvalonMasterOut masterConfig writeDataType)),
-      Vec nSlave  (Signal dom (AvalonSlaveOut  slaveConfig  readDataType)))
-  -> (Vec nMaster (Signal dom (AvalonMasterIn  masterConfig readDataType)),
-      Vec nSlave  (Signal dom (AvalonSlaveIn   slaveConfig  writeDataType)))
-avalonInterconnectFabric slaveAddrFns irqNums (inpA, inpB) = (unbundle otpA, unbundle otpB) where
-  (otpA, otpB) = unbundle $ mealy transFn s0 $ bundle (bundle inpA, bundle inpB)
+  -> Circuit
+     (Vec nMaster (AvalonMMMaster dom masterConfig readDataType writeDataType))
+     (Vec nSlave  (AvalonMMSlave  dom slaveConfig  readDataType writeDataType))
+avalonInterconnectFabric slaveAddrFns irqNums = Circuit cktFn where
+  cktFn (inpA, inpB) = (unbundle otpA, unbundle otpB) where (otpA, otpB) = unbundle $ mealy transFn s0 $ bundle (bundle inpA, bundle inpB)
 
   s0 = ()
   transFn () (mo, so) = ((), (setIrq . maybe blankMi (\n -> convSoMi (so !! n)) <$> ms, maybe blankSi (convMoSi . (mo !!)) <$> sm)) where
