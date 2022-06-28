@@ -141,12 +141,14 @@ prop_avalonmm_fifo_id = propWithModelSingleDomain
                         (\a b -> tally a === tally b)
   where
   ckt :: (C.HiddenClockResetEnable dom) => Circuit
-                                           (MM.AvalonMM dom
-                                             ('MM.AvalonMMS2MConfig 'True 'True 'True 'True 'True 'True) () 
-                                             ('MM.AvalonMMM2SConfig 'True 1 'True 'True 1 1 'True 1 'True) Int)
-                                           (MM.AvalonMM dom
-                                             ('MM.AvalonMMS2MConfig 'True 'True 'True 'True 'True 'True) ()
-                                             ('MM.AvalonMMM2SConfig 'True 1 'True 'True 1 1 'True 1 'True) Int)
+                                           (MM.AvalonMMSlave dom 0
+                                             ('MM.AvalonMMSlaveConfig 1 'True 'True 'True 'True 'True 'True
+                                               ('MM.AvalonMMSharedConfig 1 'True 'True 1 1 'True 'True 'True))
+                                             () Int)
+                                           (MM.AvalonMMMaster dom
+                                             ('MM.AvalonMMMasterConfig 'True 1 1
+                                               ('MM.AvalonMMSharedConfig 1 'True 'True 1 1 'True 'True 'True))
+                                             () Int)
   ckt = Circuit (fifo (Proxy @(_,_,Int)) Proxy (C.SNat @10) () ())
 
 prop_avalonmm_avalonstream_fifo_id :: Property
@@ -159,9 +161,10 @@ prop_avalonmm_avalonstream_fifo_id = propWithModelSingleDomain
                                      (\a b -> tally a === tally b)
   where
   ckt :: (C.HiddenClockResetEnable dom) => Circuit
-                                           (MM.AvalonMM dom
-                                             ('MM.AvalonMMS2MConfig 'True 'True 'True 'True 'True 'True) () 
-                                             ('MM.AvalonMMM2SConfig 'True 1 'True 'True 1 1 'True 1 'True) Int)
+                                           (MM.AvalonMMSlave dom 0
+                                             ('MM.AvalonMMSlaveConfig 1 'True 'True 'True 'True 'True 'True
+                                               ('MM.AvalonMMSharedConfig 1 'True 'True 1 1 'True 'True 'True))
+                                             () Int)
                                            (AvStream.AvalonStream dom 0 1 1 1 Int)
   ckt = Circuit (fifo (Proxy @(_,_,Int)) Proxy (C.SNat @10) () 0)
 
@@ -176,9 +179,10 @@ prop_avalonstream_avalonmm_fifo_id = propWithModelSingleDomain
   where
   ckt :: (C.HiddenClockResetEnable dom) => Circuit
                                            (AvStream.AvalonStream dom 0 1 1 1 Int)
-                                           (MM.AvalonMM dom
-                                             ('MM.AvalonMMS2MConfig 'True 'True 'True 'True 'True 'True) () 
-                                             ('MM.AvalonMMM2SConfig 'True 1 'True 'True 1 1 'True 1 'True) Int)
+                                           (MM.AvalonMMMaster dom
+                                             ('MM.AvalonMMMasterConfig 'True 1 1
+                                               ('MM.AvalonMMSharedConfig 1 'True 'True 1 1 'True 'True 'True))
+                                             () Int)
   ckt = Circuit (fifo (Proxy @(_,_,Int)) Proxy (C.SNat @10) () ())
 
 

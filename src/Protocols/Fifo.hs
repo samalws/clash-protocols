@@ -434,35 +434,35 @@ instance (KnownNat depth, KnownNat errorWidth, KnownNat emptyWidth, KnownNat rea
 -- Fifo classes for AvalonMemMap
 -- TODO keep ready on when not receiving data?
 
-instance (KnownNat depth, GoodMMS2MConfig configS2M, GoodMMM2SConfig configM2S, NFDataX readDataType, NFDataX writeDataType) =>
-    FifoInput (AvalonMMM2S configM2S writeDataType) (AvalonMMS2M configS2M readDataType) writeDataType depth where
-  type FifoInpState (AvalonMMM2S configM2S writeDataType) (AvalonMMS2M configS2M readDataType) writeDataType depth
+instance (KnownNat depth, GoodMMSlaveConfig config, NFDataX readDataType, NFDataX writeDataType) =>
+    FifoInput (AvalonSlaveIn config writeDataType) (AvalonSlaveOut config readDataType) writeDataType depth where
+  type FifoInpState (AvalonSlaveIn config writeDataType) (AvalonSlaveOut config readDataType) writeDataType depth
     = ()
-  type FifoInpParam (AvalonMMM2S configM2S writeDataType) (AvalonMMS2M configS2M readDataType) writeDataType depth
+  type FifoInpParam (AvalonSlaveIn config writeDataType) (AvalonSlaveOut config readDataType) writeDataType depth
     = ()
 
   fifoInpS0 _ _ _ = ()
-  fifoInpBlank _ _ _ = boolToMMS2M False
-  fifoInpFn _ _ _ m2s n | n > 0 && isJust (mmM2SToMaybe m2s) = pure (boolToMMS2M True, mmM2SToMaybe m2s)
-  fifoInpFn _ _ _ _ _ = pure (boolToMMS2M False, Nothing)
+  fifoInpBlank _ _ _ = boolToMMSlaveAck False
+  fifoInpFn _ _ _ si n | n > 0 && isJust (mmSlaveInToMaybe si) = pure (boolToMMSlaveAck True, mmSlaveInToMaybe si)
+  fifoInpFn _ _ _ _ _ = pure (boolToMMSlaveAck False, Nothing)
 
-instance (KnownNat depth, GoodMMS2MConfig configS2M, GoodMMM2SConfig configM2S, NFDataX readDataType, NFDataX writeDataType) =>
-    FifoOutput (AvalonMMM2S configM2S writeDataType) (AvalonMMS2M configS2M readDataType) writeDataType depth where
-  type FifoOtpState (AvalonMMM2S configM2S writeDataType) (AvalonMMS2M configS2M readDataType) writeDataType depth
+instance (KnownNat depth, GoodMMMasterConfig config, NFDataX readDataType, NFDataX writeDataType) =>
+    FifoOutput (AvalonMasterOut config writeDataType) (AvalonMasterIn config readDataType) writeDataType depth where
+  type FifoOtpState (AvalonMasterOut config writeDataType) (AvalonMasterIn config readDataType) writeDataType depth
     = Maybe writeDataType
-  type FifoOtpParam (AvalonMMM2S configM2S writeDataType) (AvalonMMS2M configS2M readDataType) writeDataType depth
+  type FifoOtpParam (AvalonMasterOut config writeDataType) (AvalonMasterIn config readDataType) writeDataType depth
     = ()
 
   fifoOtpS0 _ _ _ = Nothing
-  fifoOtpBlank _ _ _ = mmM2SNoData
-  fifoOtpFn _ _ _ s2m amtLeft queueItem = do
+  fifoOtpBlank _ _ _ = mmMasterOutNoData
+  fifoOtpFn _ _ _ mi amtLeft queueItem = do
     sending <- get
     retVal <- case (sending, amtLeft == maxBound) of
-      (Just toSend, _) -> pure (mmM2SSendingData { _writeData = toSend }, False)
-      (Nothing, False) -> put (Just queueItem) >> pure (mmM2SSendingData { _writeData = queueItem }, True)
-      (Nothing, True) -> pure (mmM2SNoData, False)
+      (Just toSend, _) -> pure (mmMasterOutSendingData { mo_writeData = toSend }, False)
+      (Nothing, False) -> put (Just queueItem) >> pure (mmMasterOutSendingData { mo_writeData = queueItem }, True)
+      (Nothing, True) -> pure (mmMasterOutNoData, False)
     shouldReadAck <- gets isJust -- ack might be undefined, so we shouldn't look at it unless we have to
-    when (shouldReadAck && mmS2MToBool s2m) $ put Nothing
+    when (shouldReadAck && mmMasterInToBool mi) $ put Nothing
     pure retVal
 
 
