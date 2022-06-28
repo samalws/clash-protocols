@@ -79,6 +79,7 @@ data AvalonMMSharedConfig
 data AvalonMMSlaveConfig
   =  AvalonMMSlaveConfig
   { writeByteEnableWidth   :: Nat
+  , keepChipSelect         :: Bool
   , keepBeginTransfer      :: Bool
   , keepBeginBurstTransfer :: Bool
   , keepReadyForData       :: Bool
@@ -124,22 +125,25 @@ type family KeepIrq (c :: AvalonMMSharedConfig) where
 
 
 type family WriteByteEnableWidth (c :: AvalonMMSlaveConfig) where
-  WriteByteEnableWidth ('AvalonMMSlaveConfig a _ _ _ _ _) = a
+  WriteByteEnableWidth ('AvalonMMSlaveConfig a _ _ _ _ _ _) = a
+
+type family KeepChipSelect (c :: AvalonMMSlaveConfig) where
+  KeepChipSelect ('AvalonMMSlaveConfig _ a _ _ _ _ _) = a
 
 type family KeepBeginTransfer (c :: AvalonMMSlaveConfig) where
-  KeepBeginTransfer ('AvalonMMSlaveConfig _ a _ _ _ _) = a
+  KeepBeginTransfer ('AvalonMMSlaveConfig _ _ a _ _ _ _) = a
 
 type family KeepBeginBurstTransfer (c :: AvalonMMSlaveConfig) where
-  KeepBeginBurstTransfer ('AvalonMMSlaveConfig _ _ a _ _ _) = a
+  KeepBeginBurstTransfer ('AvalonMMSlaveConfig _ _ _ a _ _ _) = a
 
 type family KeepReadyForData (c :: AvalonMMSlaveConfig) where
-  KeepReadyForData ('AvalonMMSlaveConfig _ _ _ a _ _) = a
+  KeepReadyForData ('AvalonMMSlaveConfig _ _ _ _ a _ _) = a
 
 type family KeepDataAvailable (c :: AvalonMMSlaveConfig) where
-  KeepDataAvailable ('AvalonMMSlaveConfig _ _ _ _ a _) = a
+  KeepDataAvailable ('AvalonMMSlaveConfig _ _ _ _ _ a _) = a
 
 type family SShared (c :: AvalonMMSlaveConfig) where
-  SShared ('AvalonMMSlaveConfig _ _ _ _ _ a) = a
+  SShared ('AvalonMMSlaveConfig _ _ _ _ _ _ a) = a
 
 
 type family KeepFlush (c :: AvalonMMMasterConfig) where
@@ -180,6 +184,7 @@ instance
 
 class
   ( ByteEnClass   (WriteByteEnableWidth   config)
+  , KeepBoolClass (KeepChipSelect         config)
   , KeepBoolClass (KeepBeginTransfer      config)
   , KeepBoolClass (KeepBeginBurstTransfer config)
   , KeepBoolClass (KeepReadyForData       config)
@@ -188,6 +193,7 @@ class
   ) => GoodMMSlaveConfig config
 instance
   ( ByteEnClass   (WriteByteEnableWidth   config)
+  , KeepBoolClass (KeepChipSelect         config)
   , KeepBoolClass (KeepBeginTransfer      config)
   , KeepBoolClass (KeepBeginBurstTransfer config)
   , KeepBoolClass (KeepReadyForData       config)
@@ -303,8 +309,8 @@ data AvalonSlaveIn config writeDataType
   , si_write              :: KeepBool (KeepWrite              (SShared config))
   , si_byteEnable         :: Unsigned (ByteEnableWidth        (SShared config))
   , si_burstCount         :: Unsigned (BurstCountWidth        (SShared config))
-  , si_chipSelect         :: Bool
   , si_writeByteEnable    :: Unsigned (WriteByteEnableWidth            config)
+  , si_chipSelect         :: KeepBool (KeepChipSelect                  config)
   , si_beginTransfer      :: KeepBool (KeepBeginTransfer               config)
   , si_beginBurstTransfer :: KeepBool (KeepBeginBurstTransfer          config)
   , si_writeData          :: writeDataType
@@ -328,33 +334,6 @@ deriving instance (GoodMMSlaveConfig config,
                    => Eq (AvalonSlaveIn config writeDataType)
 
 
-blankMi :: (GoodMMMasterConfig config) => AvalonMasterIn config readDataType
-blankMi
-  = AvalonMasterIn
-  { mi_waitRequest   = toKeepBool False
-  , mi_readDataValid = toKeepBool False
-  , mi_endOfPacket   = toKeepBool False
-  , mi_irq           = toKeepBool False
-  , mi_irqList       = 0
-  , mi_irqNumber     = 0
-  , mi_readData      = errorX "No read data defined"
-  }
-
-blankSi :: (GoodMMSlaveConfig config) => AvalonSlaveIn config writeDataType
-blankSi
-  =  AvalonSlaveIn
-  { si_addr               = 0
-  , si_read               = toKeepBool False
-  , si_write              = toKeepBool False
-  , si_writeByteEnable    = 0
-  , si_burstCount         = 0
-  , si_chipSelect         = toKeepBool False
-  , si_byteEnable         = 0
-  , si_beginTransfer      = toKeepBool False
-  , si_beginBurstTransfer = toKeepBool False
-  , si_writeData          = errorX "No write data defined"
-  }
-
 avalonInterconnectFabric ::
   ( HiddenClockResetEnable dom
   , KnownNat nMaster
@@ -376,7 +355,7 @@ avalonInterconnectFabric slaveAddrFns irqNums = Circuit cktFn where
   cktFn (inpA, inpB) = (unbundle otpA, unbundle otpB) where (otpA, otpB) = unbundle $ mealy transFn s0 $ bundle (bundle inpA, bundle inpB)
 
   s0 = ()
-  transFn () (mo, so) = ((), (setIrq . maybe blankMi (\n -> convSoMi (so !! n)) <$> ms, maybe blankSi (convMoSi . (mo !!)) <$> sm)) where
+  transFn () (mo, so) = ((), (setIrq . maybe mmMasterInNoData (\n -> convSoMi (so !! n)) <$> ms, maybe mmSlaveInNoData (convMoSi . (mo !!)) <$> sm)) where
     (ms, sm) = masterSlavePairings mo
     mirq = minIrq so
     irqList = fromKeepBool False . so_irq <$> so
@@ -435,13 +414,25 @@ boolToMMSlaveAck ack
 boolToMMMasterAck :: (GoodMMMasterConfig config) => Bool -> AvalonMasterIn config readDataType
 boolToMMMasterAck ack
   =  AvalonMasterIn
-  { mi_waitRequest   = toKeepBool ack
+  { mi_waitRequest   = toKeepBool (not ack)
   , mi_readDataValid = toKeepBool False
   , mi_endOfPacket   = toKeepBool False
   , mi_irq           = toKeepBool False
   , mi_irqList       = 0
   , mi_irqNumber     = 0
   , mi_readData      = errorX "No readData for boolToAck"
+  }
+
+mmMasterInNoData :: (GoodMMMasterConfig config) => AvalonMasterIn config readDataType
+mmMasterInNoData
+  = AvalonMasterIn
+  { mi_waitRequest   = toKeepBool False
+  , mi_readDataValid = toKeepBool False
+  , mi_endOfPacket   = toKeepBool False
+  , mi_irq           = toKeepBool False
+  , mi_irqList       = 0
+  , mi_irqNumber     = 0
+  , mi_readData      = errorX "No read data defined"
   }
 
 mmSlaveInNoData :: (GoodMMSlaveConfig config) => AvalonSlaveIn config writeDataType
@@ -458,7 +449,6 @@ mmSlaveInNoData
   , si_beginBurstTransfer = toKeepBool False
   , si_writeData          = errorX "No writeData for noData"
   }
--- TODO didnt i just define this above
 
 mmMasterOutNoData :: (GoodMMMasterConfig config) => AvalonMasterOut config writeDataType
 mmMasterOutNoData
@@ -474,7 +464,6 @@ mmMasterOutNoData
 
 mmSlaveOutToBool :: (GoodMMSlaveConfig config) => AvalonSlaveOut config readDataType -> Bool
 mmSlaveOutToBool so = fromKeepBool True (so_readyForData so) && not (fromKeepBool False (so_waitRequest so))
--- TODO "SlaveOut" vs "so"
 
 mmMasterInToBool :: (GoodMMMasterConfig config) => AvalonMasterIn config readDataType -> Bool
 mmMasterInToBool = not . fromKeepBool False . mi_waitRequest
