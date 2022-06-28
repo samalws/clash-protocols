@@ -48,6 +48,21 @@ convKeepBool :: (KeepBoolClass a, KeepBoolClass b) => Bool -> KeepBool a -> Keep
 convKeepBool b = toKeepBool . fromKeepBool b
 
 
+class (KnownNat byteEnableWidth) => ByteEnClass (byteEnableWidth :: Nat) where
+  byteEnableNull :: Unsigned byteEnableWidth -> Bool
+
+instance ByteEnClass 0 where
+  byteEnableNull = const False
+
+instance (1 <= n, KnownNat n) => ByteEnClass n where
+  byteEnableNull = (0 ==)
+
+
+class EqOrZero (n :: Nat) (m :: Nat)
+instance EqOrZero 0 m
+instance EqOrZero m m
+
+
 data AvalonMMSharedConfig
   =  AvalonMMSharedConfig
   { addrWidth         :: Nat
@@ -140,7 +155,7 @@ class
   ( KnownNat      (AddrWidth         config)
   , KeepBoolClass (KeepRead          config)
   , KeepBoolClass (KeepWrite         config)
-  , KnownNat      (ByteEnableWidth   config)
+  , ByteEnClass   (ByteEnableWidth   config)
   , KnownNat      (BurstCountWidth   config)
   , KeepBoolClass (KeepWaitRequest   config)
   , KeepBoolClass (KeepReadDataValid config)
@@ -151,7 +166,7 @@ instance
   ( KnownNat      (AddrWidth         config)
   , KeepBoolClass (KeepRead          config)
   , KeepBoolClass (KeepWrite         config)
-  , KnownNat      (ByteEnableWidth   config)
+  , ByteEnClass   (ByteEnableWidth   config)
   , KnownNat      (BurstCountWidth   config)
   , KeepBoolClass (KeepWaitRequest   config)
   , KeepBoolClass (KeepReadDataValid config)
@@ -160,7 +175,7 @@ instance
   ) => GoodMMSharedConfig config
 
 class
-  ( KnownNat      (WriteByteEnableWidth   config)
+  ( ByteEnClass   (WriteByteEnableWidth   config)
   , KeepBoolClass (KeepBeginTransfer      config)
   , KeepBoolClass (KeepBeginBurstTransfer config)
   , KeepBoolClass (KeepReadyForData       config)
@@ -168,7 +183,7 @@ class
   , GoodMMSharedConfig (SShared           config)
   ) => GoodMMSlaveConfig config
 instance
-  ( KnownNat      (WriteByteEnableWidth   config)
+  ( ByteEnClass   (WriteByteEnableWidth   config)
   , KeepBoolClass (KeepBeginTransfer      config)
   , KeepBoolClass (KeepBeginBurstTransfer config)
   , KeepBoolClass (KeepReadyForData       config)
@@ -339,8 +354,8 @@ avalonInterconnectFabric ::
   , GoodMMMasterConfig masterConfig
   , GoodMMSlaveConfig  slaveConfig
   , AddrWidth (MShared masterConfig) ~ AddrWidth (SShared slaveConfig)
-  , ByteEnableWidth (MShared masterConfig) ~ ByteEnableWidth (SShared slaveConfig)
-  -- , ByteEnableWidth (MShared masterConfig) ~ WriteByteEnableWidth slaveConfig -- TODO or writebyteenablewidth == 0
+  , EqOrZero (WriteByteEnableWidth slaveConfig)      (ByteEnableWidth (MShared masterConfig))
+  , EqOrZero (ByteEnableWidth (SShared slaveConfig)) (ByteEnableWidth (MShared masterConfig))
   , BurstCountWidth (MShared masterConfig) ~ BurstCountWidth (SShared slaveConfig)
   )
   => Vec nSlave (Unsigned (AddrWidth (SShared slaveConfig)) -> Bool)
@@ -353,14 +368,15 @@ avalonInterconnectFabric slaveAddrFns irqNums (inpA, inpB) = (unbundle otpA, unb
   (otpA, otpB) = unbundle $ mealy transFn s0 $ bundle (bundle inpA, bundle inpB)
 
   s0 = ()
-  transFn () (mo, so) = let (ms, sm) = masterSlavePairings mo in ((), (maybe blankMi (\n -> convSoMi (so !! n) (irqNums !! n)) <$> ms, maybe blankSi (convMoSi . (mo !!)) <$> sm))
+  transFn () (mo, so) = ((), (maybe blankMi (\n -> convSoMi (so !! n) (irqNums !! n)) <$> ms, maybe blankSi (convMoSi . (mo !!)) <$> sm)) where
+    (ms, sm) = masterSlavePairings mo
 
   -- TODO what if 2 masters put in same slave addr
   masterSlavePairings mo = ((\moMsg -> findIndex ($ mo_addr moMsg) slaveAddrFns) <$> mo, (\addrFn -> findIndex (addrFn . mo_addr) mo) <$> slaveAddrFns)
 
   convSoMi so irqNum
     = AvalonMasterIn
-    { mi_waitRequest   = convKeepBool False (so_waitRequest so) -- TODO
+    { mi_waitRequest   = convKeepBool False (so_waitRequest so)
     , mi_readDataValid = convKeepBool False (so_readDataValid so)
     , mi_endOfPacket   = convKeepBool False (so_endOfPacket so)
     , mi_irq           = convKeepBool False (so_irq so)
@@ -376,11 +392,13 @@ avalonInterconnectFabric slaveAddrFns irqNums (inpA, inpB) = (unbundle otpA, unb
     , si_writeByteEnable    = resize $ if (fromKeepBool True (mo_write mo)) then mo_byteEnable mo else 0
     , si_burstCount         = mo_burstCount mo
     , si_chipSelect         = toKeepBool True
-    , si_byteEnable         = mo_byteEnable mo
+    , si_byteEnable         = resize $ mo_byteEnable mo
     , si_beginTransfer      = errorX "TODO"
     , si_beginBurstTransfer = errorX "TODO"
     , si_writeData          = mo_writeData mo
     }
+
+-- TODO support for fixed wait time
 
 
 boolToMMSlaveAck :: (GoodMMSlaveConfig config) => Bool -> AvalonSlaveOut config readDataType
@@ -448,8 +466,8 @@ mmSlaveInSendingData
   , si_addr               = 0
   , si_read               = toKeepBool False
   , si_write              = toKeepBool True
-  , si_byteEnable         = 0 -- TODO
-  , si_writeByteEnable    = 0
+  , si_byteEnable         = bitCoerce $ repeat True
+  , si_writeByteEnable    = bitCoerce $ repeat True
   , si_beginTransfer      = toKeepBool False
   , si_burstCount         = 0
   , si_beginBurstTransfer = toKeepBool False
@@ -462,7 +480,7 @@ mmMasterOutSendingData
   { mo_addr        = 0
   , mo_read        = toKeepBool False
   , mo_write       = toKeepBool True
-  , mo_byteEnable  = 0 -- TODO
+  , mo_byteEnable  = bitCoerce $ repeat True
   , mo_burstCount  = 0
   , mo_flush       = toKeepBool False
   , mo_writeData   = errorX "No writeData for mmMasterOutSendingData"
@@ -475,15 +493,16 @@ mmSlaveInToMaybe si = if cond then Just (si_writeData si) else Nothing where
   cond =  fromKeepBool True (si_chipSelect si)
        && fromKeepBool True (si_write si)
        && not (fromKeepBool False (si_read si))
-  -- TODO look at byteenable
+       && not (byteEnableNull (si_byteEnable si))
+       && not (byteEnableNull (si_writeByteEnable si))
 
 mmMasterOutToMaybe :: (GoodMMMasterConfig config) => AvalonMasterOut config writeDataType -> Maybe writeDataType
 mmMasterOutToMaybe mo = if cond then Just (mo_writeData mo) else Nothing where
   cond =  fromKeepBool True (mo_write mo)
        && not (fromKeepBool False (mo_read mo))
-  -- TODO look at byteenable
+       && not (byteEnableNull (mo_byteEnable mo))
 
-
+-- TODO rename master to whatever they changed it to
 data AvalonMMMaster (dom :: Domain) (config :: AvalonMMMasterConfig) (readDataType :: Type) (writeDataType :: Type) = AvalonMMMaster
 
 data AvalonMMSlave (dom :: Domain) (config :: AvalonMMSlaveConfig) (readDataType :: Type) (writeDataType :: Type) = AvalonMMSlave
