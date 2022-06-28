@@ -8,7 +8,7 @@ module Protocols.Avalon.MemMap.AvalonMemMap where
 
 -- base
 import           Control.DeepSeq (NFData)
-import           Prelude hiding (not, (&&), repeat, (!!))
+import           Prelude hiding (not, (&&), repeat, (!!), foldl)
 
 import qualified Data.Maybe as Maybe
 import           Data.Proxy
@@ -89,6 +89,7 @@ data AvalonMMSlaveConfig
 data AvalonMMMasterConfig
   =  AvalonMMMasterConfig
   { keepFlush      :: Bool
+  , irqListWidth   :: Nat
   , irqNumberWidth :: Nat
   , mShared        :: AvalonMMSharedConfig
   }
@@ -142,13 +143,16 @@ type family SShared (c :: AvalonMMSlaveConfig) where
 
 
 type family KeepFlush (c :: AvalonMMMasterConfig) where
-  KeepFlush ('AvalonMMMasterConfig a _ _) = a
+  KeepFlush ('AvalonMMMasterConfig a _ _ _) = a
+
+type family IrqListWidth (c :: AvalonMMMasterConfig) where
+  IrqListWidth ('AvalonMMMasterConfig _ a _ _) = a
 
 type family IrqNumberWidth (c :: AvalonMMMasterConfig) where
-  IrqNumberWidth ('AvalonMMMasterConfig _ a _) = a
+  IrqNumberWidth ('AvalonMMMasterConfig _ _ a _) = a
 
 type family MShared (c :: AvalonMMMasterConfig) where
-  MShared ('AvalonMMMasterConfig _ _ a) = a
+  MShared ('AvalonMMMasterConfig _ _ _ a) = a
 
 
 class
@@ -193,11 +197,13 @@ instance
 
 class
   ( KeepBoolClass (KeepFlush      config)
+  , KnownNat      (IrqListWidth   config)
   , KnownNat      (IrqNumberWidth config)
   , GoodMMSharedConfig (MShared   config)
   ) => GoodMMMasterConfig config
 instance
   ( KeepBoolClass (KeepFlush      config)
+  , KnownNat      (IrqListWidth   config)
   , KnownNat      (IrqNumberWidth config)
   , GoodMMSharedConfig (MShared   config)
   ) => GoodMMMasterConfig config
@@ -238,6 +244,7 @@ data AvalonMasterIn config readDataType
   , mi_readDataValid :: KeepBool (KeepReadDataValid (MShared config))
   , mi_endOfPacket   :: KeepBool (KeepEndOfPacket   (MShared config))
   , mi_irq           :: KeepBool (KeepIrq           (MShared config))
+  , mi_irqList       :: Unsigned (IrqListWidth               config)
   , mi_irqNumber     :: Unsigned (IrqNumberWidth             config)
   , mi_readData      :: readDataType
   }
@@ -328,6 +335,7 @@ blankMi
   , mi_readDataValid = toKeepBool False
   , mi_endOfPacket   = toKeepBool False
   , mi_irq           = toKeepBool False
+  , mi_irqList       = 0
   , mi_irqNumber     = 0
   , mi_readData      = errorX "No read data defined"
   }
@@ -351,6 +359,7 @@ avalonInterconnectFabric ::
   ( HiddenClockResetEnable dom
   , KnownNat nMaster
   , KnownNat nSlave
+  , nSlave ~ (decNSlave + 1)
   , GoodMMMasterConfig masterConfig
   , GoodMMSlaveConfig  slaveConfig
   , AddrWidth (MShared masterConfig) ~ AddrWidth (SShared slaveConfig)
@@ -368,19 +377,30 @@ avalonInterconnectFabric slaveAddrFns irqNums (inpA, inpB) = (unbundle otpA, unb
   (otpA, otpB) = unbundle $ mealy transFn s0 $ bundle (bundle inpA, bundle inpB)
 
   s0 = ()
-  transFn () (mo, so) = ((), (maybe blankMi (\n -> convSoMi (so !! n) (irqNums !! n)) <$> ms, maybe blankSi (convMoSi . (mo !!)) <$> sm)) where
+  transFn () (mo, so) = ((), (setIrq . maybe blankMi (\n -> convSoMi (so !! n)) <$> ms, maybe blankSi (convMoSi . (mo !!)) <$> sm)) where
     (ms, sm) = masterSlavePairings mo
+    mirq = minIrq so
+    irqList = fromKeepBool False . so_irq <$> so
+    setIrq mi = mi { mi_irq = toKeepBool (Maybe.isJust mirq), mi_irqList = unpack $ resize $ pack irqList, mi_irqNumber = Maybe.fromMaybe 0 mirq }
+
+  minIrq so = fold minJust $ irqNum <$> so <*> irqNums where
+    minJust (Just a) (Just b) | a < b = Just a
+    minJust (Just a) Nothing = Just a
+    minJust _ b = b
+
+    irqNum soMsg num = if fromKeepBool False (so_irq soMsg) then Just num else Nothing
 
   -- TODO what if 2 masters put in same slave addr
   masterSlavePairings mo = ((\moMsg -> findIndex ($ mo_addr moMsg) slaveAddrFns) <$> mo, (\addrFn -> findIndex (addrFn . mo_addr) mo) <$> slaveAddrFns)
 
-  convSoMi so irqNum
+  convSoMi so
     = AvalonMasterIn
     { mi_waitRequest   = convKeepBool False (so_waitRequest so)
     , mi_readDataValid = convKeepBool False (so_readDataValid so)
     , mi_endOfPacket   = convKeepBool False (so_endOfPacket so)
-    , mi_irq           = convKeepBool False (so_irq so)
-    , mi_irqNumber     = if (fromKeepBool False (so_irq so)) then irqNum else 0 -- TODO what if someone else's irq is on
+    , mi_irq           = errorX "interconnect fabric: this value gets overwritten later"
+    , mi_irqList       = errorX "interconnect fabric: this value gets overwritten later"
+    , mi_irqNumber     = errorX "interconnect fabric: this value gets overwritten later"
     , mi_readData      = so_readData so
     }
 
@@ -420,6 +440,7 @@ boolToMMMasterAck ack
   , mi_readDataValid = toKeepBool False
   , mi_endOfPacket   = toKeepBool False
   , mi_irq           = toKeepBool False
+  , mi_irqList       = 0
   , mi_irqNumber     = 0
   , mi_readData      = errorX "No readData for boolToAck"
   }
