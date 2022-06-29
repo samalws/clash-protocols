@@ -333,9 +333,9 @@ deriving instance (GoodMMSlaveConfig config,
                    Eq writeDataType)
                    => Eq (AvalonSlaveIn config writeDataType)
 
-
 avalonInterconnectFabric ::
   ( HiddenClockResetEnable dom
+  , KnownNat fixedWaitTime
   , KnownNat nMaster
   , KnownNat nSlave
   , nSlave ~ (decNSlave + 1)
@@ -348,15 +348,17 @@ avalonInterconnectFabric ::
   )
   => Vec nSlave (Unsigned (AddrWidth (SShared slaveConfig)) -> Bool)
   -> Vec nSlave (Unsigned (IrqNumberWidth masterConfig))
+  -> SNat fixedWaitTime
   -> Circuit
-     (Vec nMaster (AvalonMMMaster dom masterConfig readDataType writeDataType))
-     (Vec nSlave  (AvalonMMSlave  dom slaveConfig  readDataType writeDataType))
-avalonInterconnectFabric slaveAddrFns irqNums = Circuit cktFn where
+     (Vec nMaster (AvalonMMMaster dom               masterConfig readDataType writeDataType))
+     (Vec nSlave  (AvalonMMSlave  dom fixedWaitTime slaveConfig  readDataType writeDataType))
+avalonInterconnectFabric slaveAddrFns irqNums fixedWaitTime = Circuit cktFn where
   cktFn (inpA, inpB) = (unbundle otpA, unbundle otpB) where (otpA, otpB) = unbundle $ mealy transFn s0 $ bundle (bundle inpA, bundle inpB)
 
   s0 = (repeat Nothing, repeat Nothing)
 
   -- xferSt is indexed by slave
+  -- xferSt: Vec (Maybe (ctr: num waitrequest=false - num readdatavalid=true, ctr2: xfers left in burst (dec on readdatavalid=true), ctr3: fixed wait time left (dec always, loop around on good message), ready for transfer (becomes True on waitrequest=false and ctr3=0, False on good message)))
   transFn (smOld, xferSt) (mo, so) = ((sm, xferSt'), (mi, si)) where
     (ms, sm) = masterSlavePairings mo smOld xferSt
     mirq = minIrq so
@@ -383,20 +385,29 @@ avalonInterconnectFabric slaveAddrFns irqNums = Circuit cktFn where
   moIsOn mo = (fromKeepBool True (mo_read mo) || fromKeepBool True (mo_write mo)) && (0 /= fromMaybeEmptyNum 1 (mo_byteEnable mo))
 
   modifySt Nothing _ _ = Nothing
-  modifySt (Just mo) so st = modifySt' so (Maybe.fromMaybe (0 :: Unsigned 8,
-                                           mo_burstCount mo,
-                                           errorX "interconnect fabric: this gets overwritten later"
-                                           ) st)
-  modifySt' so (ctr, ctr2, _) = modifySt'' (optDecStCtr so $ if not (fromKeepBool False $ so_waitRequest so) then ctr+1 else ctr,
-                                            optDecStCtr so ctr2,
-                                            fromKeepBool False $ so_waitRequest so)
+  modifySt (Just mo) so st = modifySt' mo so (Maybe.fromMaybe (0 :: Unsigned 8,
+                                                               mo_burstCount mo,
+                                                               _0 fixedWaitTime,
+                                                               False) st)
+  modifySt' mo so (ctr, ctr2, ctr3, readyForTransfer) = modifySt'' (optDecStCtr so $ if not (fromKeepBool False $ so_waitRequest so) then ctr+1 else ctr,
+                                                                    optDecStCtr so ctr2,
+                                                                    modifyCounter3 mo ctr3,
+                                                                    modifyReadyForTransfer mo so ctr3 readyForTransfer)
   optDecStCtr so ctr = if (ctr /= 0) && (fromKeepBool True $ so_readDataValid so) then ctr-1 else ctr
-  modifySt'' (0, 0, _) = Nothing
+  modifyCounter3 mo 0 = if moIsOn mo then maxBound else 0
+  modifyCounter3 _ n = n-1
+  modifyReadyForTransfer mo so ctr3 readyForTransfer
+    | not (fromKeepBool False (so_waitRequest so)) && ctr3 == 0 = True
+    | moIsOn mo = False
+    | otherwise = readyForTransfer
+  modifySt'' (0, 0, 0, _) = Nothing
   modifySt'' st = Just st
+  _0 :: (KnownNat n) => SNat n -> Index n
+  _0 _ = 0
 
   convSoMi so st
     = AvalonMasterIn
-    { mi_waitRequest   = toKeepBool $ (Maybe.maybe True (\(_,_,cnt) -> cnt < maxBound) st) && (fromKeepBool False (so_waitRequest so))
+    { mi_waitRequest   = toKeepBool $ (Maybe.maybe True (\(ctr,_,ctr3,_) -> ctr < maxBound && ctr3 == 0) st) && (fromKeepBool False (so_waitRequest so))
     , mi_readDataValid = convKeepBool False (so_readDataValid so)
     , mi_endOfPacket   = convKeepBool False (so_endOfPacket so)
     , mi_irq           = errorX "interconnect fabric: this value gets overwritten later"
@@ -414,12 +425,10 @@ avalonInterconnectFabric slaveAddrFns irqNums = Circuit cktFn where
     , si_burstCount         = mo_burstCount mo
     , si_chipSelect         = toKeepBool True
     , si_byteEnable         = resize $ mo_byteEnable mo
-    , si_beginTransfer      = toKeepBool $ Maybe.maybe True (\(_,_,lastWaitReq) -> lastWaitReq) st
+    , si_beginTransfer      = toKeepBool $ moIsOn mo && (Maybe.maybe True (\(_,_,_,readyForMsg) -> readyForMsg) st)
     , si_beginBurstTransfer = toKeepBool $ Maybe.isNothing st
     , si_writeData          = mo_writeData mo
     }
-
--- TODO support for fixed wait time
 
 
 boolToMMSlaveAck :: (GoodMMSlaveConfig config) => Bool -> AvalonSlaveOut config readDataType
@@ -513,7 +522,7 @@ mmMasterOutSendingData
   , mo_read        = toKeepBool False
   , mo_write       = toKeepBool True
   , mo_byteEnable  = bitCoerce $ repeat True
-  , mo_burstCount  = 0
+  , mo_burstCount  = 1
   , mo_flush       = toKeepBool False
   , mo_writeData   = errorX "No writeData for mmMasterOutSendingData"
   }
@@ -537,26 +546,27 @@ mmMasterOutToMaybe mo = if cond then Just (mo_writeData mo) else Nothing where
 -- TODO rename master to whatever they changed it to
 data AvalonMMMaster (dom :: Domain) (config :: AvalonMMMasterConfig) (readDataType :: Type) (writeDataType :: Type) = AvalonMMMaster
 
-data AvalonMMSlave (dom :: Domain) (config :: AvalonMMSlaveConfig) (readDataType :: Type) (writeDataType :: Type) = AvalonMMSlave
+data AvalonMMSlave (dom :: Domain) (fixedWaitTime :: Nat) (config :: AvalonMMSlaveConfig) (readDataType :: Type) (writeDataType :: Type) = AvalonMMSlave
+-- TODO support fixed wait time in instances below
 
 instance Protocol (AvalonMMMaster dom config readDataType writeDataType) where
   type Fwd (AvalonMMMaster dom config readDataType writeDataType) = Signal dom (AvalonMasterOut config writeDataType)
   type Bwd (AvalonMMMaster dom config readDataType writeDataType) = Signal dom (AvalonMasterIn  config readDataType)
 
-instance Protocol (AvalonMMSlave dom config readDataType writeDataType) where
-  type Fwd (AvalonMMSlave dom config readDataType writeDataType) = Signal dom (AvalonSlaveIn  config writeDataType)
-  type Bwd (AvalonMMSlave dom config readDataType writeDataType) = Signal dom (AvalonSlaveOut config readDataType)
+instance Protocol (AvalonMMSlave dom fixedWaitTime config readDataType writeDataType) where
+  type Fwd (AvalonMMSlave dom fixedWaitTime config readDataType writeDataType) = Signal dom (AvalonSlaveIn  config writeDataType)
+  type Bwd (AvalonMMSlave dom fixedWaitTime config readDataType writeDataType) = Signal dom (AvalonSlaveOut config readDataType)
 
-instance (GoodMMSlaveConfig config) => Backpressure (AvalonMMSlave dom config readDataType writeDataType) where
+instance (GoodMMSlaveConfig config) => Backpressure (AvalonMMSlave dom 0 config readDataType writeDataType) where
   boolsToBwd _ = C.fromList_lazy . fmap boolToMMSlaveAck
 
 instance (GoodMMMasterConfig config) => Backpressure (AvalonMMMaster dom config readDataType writeDataType) where
   boolsToBwd _ = C.fromList_lazy . fmap boolToMMMasterAck
 
-instance (KnownDomain dom, GoodMMSlaveConfig config) => Simulate (AvalonMMSlave dom config readDataType writeDataType) where
-  type SimulateFwdType (AvalonMMSlave dom config readDataType writeDataType) = [AvalonSlaveIn  config writeDataType]
-  type SimulateBwdType (AvalonMMSlave dom config readDataType writeDataType) = [AvalonSlaveOut config readDataType]
-  type SimulateChannels (AvalonMMSlave dom config readDataType writeDataType) = 1
+instance (KnownDomain dom, GoodMMSlaveConfig config) => Simulate (AvalonMMSlave dom 0 config readDataType writeDataType) where
+  type SimulateFwdType (AvalonMMSlave dom 0 config readDataType writeDataType) = [AvalonSlaveIn  config writeDataType]
+  type SimulateBwdType (AvalonMMSlave dom 0 config readDataType writeDataType) = [AvalonSlaveOut config readDataType]
+  type SimulateChannels (AvalonMMSlave dom 0 config readDataType writeDataType) = 1
 
   simToSigFwd _ = C.fromList_lazy
   simToSigBwd _ = C.fromList_lazy
@@ -577,8 +587,8 @@ instance (KnownDomain dom, GoodMMMasterConfig config) => Simulate (AvalonMMMaste
 
   stallC conf (C.head -> (stallAck, stalls)) = DfLike.stall Proxy conf stallAck stalls
 
-instance (KnownDomain dom, GoodMMSlaveConfig config) => Drivable (AvalonMMSlave dom config readDataType writeDataType) where
-  type ExpectType (AvalonMMSlave dom config readDataType writeDataType) = [writeDataType]
+instance (KnownDomain dom, GoodMMSlaveConfig config) => Drivable (AvalonMMSlave dom 0 config readDataType writeDataType) where
+  type ExpectType (AvalonMMSlave dom 0 config readDataType writeDataType) = [writeDataType]
 
   toSimulateType Proxy = fmap (\dat -> mmSlaveInSendingData { si_writeData = dat })
   fromSimulateType Proxy = Maybe.mapMaybe mmSlaveInToMaybe
@@ -595,10 +605,10 @@ instance (KnownDomain dom, GoodMMMasterConfig config) => Drivable (AvalonMMMaste
   driveC = DfLike.drive Proxy
   sampleC = DfLike.sample Proxy
 
-instance (KnownDomain dom, GoodMMSlaveConfig config) => DfLike dom (AvalonMMSlave dom config readDataType) writeDataType where
-  type Data (AvalonMMSlave dom config readDataType) writeDataType = AvalonSlaveIn config writeDataType
+instance (KnownDomain dom, GoodMMSlaveConfig config) => DfLike dom (AvalonMMSlave dom 0 config readDataType) writeDataType where
+  type Data (AvalonMMSlave dom 0 config readDataType) writeDataType = AvalonSlaveIn config writeDataType
   type Payload writeDataType = writeDataType
-  type Ack (AvalonMMSlave dom config readDataType) writeDataType = AvalonSlaveOut config readDataType
+  type Ack (AvalonMMSlave dom 0 config readDataType) writeDataType = AvalonSlaveOut config readDataType
 
   getPayload = const $ mmSlaveInToMaybe
 
@@ -637,7 +647,7 @@ instance (KnownDomain dom,
           NFData readDataType,
           NFDataX readDataType,
           Eq readDataType)
-          => Test (AvalonMMSlave dom config readDataType writeDataType) where
+          => Test (AvalonMMSlave dom 0 config readDataType writeDataType) where
 
   expectToLengths Proxy = pure . length
 
