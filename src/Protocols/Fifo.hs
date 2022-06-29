@@ -432,34 +432,86 @@ instance (KnownNat depth, KnownNat errorWidth, KnownNat emptyWidth, KnownNat rea
 
 
 -- Fifo classes for AvalonMemMap
--- TODO keep ready on when not receiving data?
+-- TODO keep waitrequest on when not receiving data?
 
 instance (KnownNat depth, GoodMMSlaveConfig config, NFDataX readDataType, NFDataX writeDataType) =>
     FifoInput (AvalonSlaveIn config writeDataType) (AvalonSlaveOut config readDataType) writeDataType depth where
   type FifoInpState (AvalonSlaveIn config writeDataType) (AvalonSlaveOut config readDataType) writeDataType depth
     = ()
   type FifoInpParam (AvalonSlaveIn config writeDataType) (AvalonSlaveOut config readDataType) writeDataType depth
-    = ()
+    = Unsigned (AddrWidth (SShared config))
 
   fifoInpS0 _ _ _ = ()
   fifoInpBlank _ _ _ = boolToMMSlaveAck False
-  fifoInpFn _ _ _ si n | n > 0 && isJust (mmSlaveInToMaybe si) = pure (boolToMMSlaveAck True, mmSlaveInToMaybe si)
+  fifoInpFn _ _ addr si n | n > 0 && isJust (mmSlaveInToMaybe si) && si_addr si == addr = pure (boolToMMSlaveAck True, mmSlaveInToMaybe si)
   fifoInpFn _ _ _ _ _ = pure (boolToMMSlaveAck False, Nothing)
+
+instance (KnownNat depth, GoodMMMasterConfig config, NFDataX readDataType, NFDataX writeDataType) =>
+    FifoInput (AvalonMasterIn config readDataType) (AvalonMasterOut config writeDataType) readDataType depth where
+  type FifoInpState (AvalonMasterIn config readDataType) (AvalonMasterOut config writeDataType) readDataType depth
+    = Bool -- whether amtFree > 0 was true last frame
+  type FifoInpParam (AvalonMasterIn config readDataType) (AvalonMasterOut config writeDataType) readDataType depth
+    = Unsigned (AddrWidth (MShared config))
+
+  fifoInpS0 _ _ _ = True
+  fifoInpBlank _ _ _ = mmMasterOutNoData
+
+  fifoInpFn _ _ addr mi n = do
+    nWasOver0 <- get
+    put (n > 0)
+    pure (
+      AvalonMasterOut
+      { mo_addr        = addr
+      , mo_read        = toKeepBool (n > 0)
+      , mo_write       = toKeepBool False
+      , mo_byteEnable  = if n > 0 then bitCoerce (repeat True) else 0
+      , mo_burstCount  = if n > 0 then 1 else 0
+      , mo_flush       = toKeepBool False
+      , mo_writeData   = errorX "No writeData for Avalon MM fifoInpFn"
+      }
+      , if mi_waitRequest mi && nWasOver0 then Nothing else Just (mi_readData mi))
+
+instance (KnownNat depth, GoodMMSlaveConfig config, NFDataX readDataType, NFDataX writeDataType) =>
+    FifoOutput (AvalonSlaveOut config readDataType) (AvalonSlaveIn config writeDataType) readDataType depth where
+  type FifoOtpState (AvalonSlaveOut config readDataType) (AvalonSlaveIn config writeDataType) readDataType depth
+    = ()
+  type FifoOtpParam (AvalonSlaveOut config readDataType) (AvalonSlaveIn config writeDataType) readDataType depth
+    = Unsigned (AddrWidth (SShared config))
+
+  fifoOtpS0 _ _ _ = ()
+  fifoOtpBlank _ _ _ = boolToMMSlaveAck False
+  fifoOtpFn _ _ addr si amtLeft queueItem
+    = let ack = amtLeft < maxBound
+    in pure (
+    AvalonSlaveOut
+    { so_waitRequest   = toKeepBool ack
+    , so_readDataValid = toKeepBool ack
+    , so_readyForData  = toKeepBool False
+    , so_dataAvailable = toKeepBool ack
+    , so_endOfPacket   = toKeepBool True
+    , so_irq           = toKeepBool True
+    , so_readData      = queueItem
+    }
+    , ack
+    && fromKeepBool True (si_chipSelect si)
+    && fromKeepBool True (si_read si)
+    && 0 /= fromMaybeEmptyNum 1 (si_byteEnable si)
+    && si_addr si == addr)
 
 instance (KnownNat depth, GoodMMMasterConfig config, NFDataX readDataType, NFDataX writeDataType) =>
     FifoOutput (AvalonMasterOut config writeDataType) (AvalonMasterIn config readDataType) writeDataType depth where
   type FifoOtpState (AvalonMasterOut config writeDataType) (AvalonMasterIn config readDataType) writeDataType depth
     = Maybe writeDataType
   type FifoOtpParam (AvalonMasterOut config writeDataType) (AvalonMasterIn config readDataType) writeDataType depth
-    = ()
+    = Unsigned (AddrWidth (MShared config))
 
   fifoOtpS0 _ _ _ = Nothing
   fifoOtpBlank _ _ _ = mmMasterOutNoData
-  fifoOtpFn _ _ _ mi amtLeft queueItem = do
+  fifoOtpFn _ _ addr mi amtLeft queueItem = do
     sending <- get
     retVal <- case (sending, amtLeft == maxBound) of
-      (Just toSend, _) -> pure (mmMasterOutSendingData { mo_writeData = toSend }, False)
-      (Nothing, False) -> put (Just queueItem) >> pure (mmMasterOutSendingData { mo_writeData = queueItem }, True)
+      (Just toSend, _) -> pure (mmMasterOutSendingData { mo_writeData = toSend, mo_addr = addr }, False)
+      (Nothing, False) -> put (Just queueItem) >> pure (mmMasterOutSendingData { mo_writeData = queueItem, mo_addr = addr }, True)
       (Nothing, True) -> pure (mmMasterOutNoData, False)
     shouldReadAck <- gets isJust -- ack might be undefined, so we shouldn't look at it unless we have to
     when (shouldReadAck && mmMasterInToBool mi) $ put Nothing

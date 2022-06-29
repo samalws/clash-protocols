@@ -522,7 +522,7 @@ mmMasterOutSendingData
   , mo_read        = toKeepBool False
   , mo_write       = toKeepBool True
   , mo_byteEnable  = bitCoerce $ repeat True
-  , mo_burstCount  = 0
+  , mo_burstCount  = 1
   , mo_flush       = toKeepBool False
   , mo_writeData   = errorX "No writeData for mmMasterOutSendingData"
   }
