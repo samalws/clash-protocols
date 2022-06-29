@@ -8,7 +8,7 @@ module Protocols.Avalon.MemMap.AvalonMemMap where
 
 -- base
 import           Control.DeepSeq (NFData)
-import           Prelude hiding (not, (&&), repeat, (!!), foldl)
+import           Prelude hiding (not, (&&), (||), repeat, (!!), foldl, unzip)
 
 import qualified Data.Maybe as Maybe
 import           Data.Proxy
@@ -48,14 +48,14 @@ convKeepBool :: (KeepBoolClass a, KeepBoolClass b) => Bool -> KeepBool a -> Keep
 convKeepBool b = toKeepBool . fromKeepBool b
 
 
-class (KnownNat byteEnableWidth) => ByteEnClass (byteEnableWidth :: Nat) where
-  byteEnableNull :: Unsigned byteEnableWidth -> Bool
+class (KnownNat n) => MaybeZeroNat (n :: Nat) where
+  fromMaybeEmptyNum :: Unsigned (n+1) -> Unsigned n -> Unsigned (n+1)
 
-instance ByteEnClass 0 where
-  byteEnableNull = const False
+instance MaybeZeroNat 0 where
+  fromMaybeEmptyNum n _ = n
 
-instance (1 <= n, KnownNat n) => ByteEnClass n where
-  byteEnableNull = (0 ==)
+instance (1 <= n, KnownNat n) => MaybeZeroNat n where
+  fromMaybeEmptyNum _ m = resize m
 
 
 class EqOrZero (n :: Nat) (m :: Nat)
@@ -70,7 +70,6 @@ data AvalonMMSharedConfig
   , keepWrite         :: Bool
   , byteEnableWidth   :: Nat
   , burstCountWidth   :: Nat
-  , keepWaitRequest   :: Bool
   , keepReadDataValid :: Bool
   , keepEndOfPacket   :: Bool
   , keepIrq           :: Bool
@@ -81,6 +80,7 @@ data AvalonMMSlaveConfig
   { writeByteEnableWidth   :: Nat
   , keepChipSelect         :: Bool
   , keepBeginTransfer      :: Bool
+  , keepWaitRequest        :: Bool
   , keepBeginBurstTransfer :: Bool
   , keepReadyForData       :: Bool
   , keepDataAvailable      :: Bool
@@ -97,53 +97,53 @@ data AvalonMMMasterConfig
 
 
 type family AddrWidth (c :: AvalonMMSharedConfig) where
-  AddrWidth ('AvalonMMSharedConfig a _ _ _ _ _ _ _ _) = a
+  AddrWidth ('AvalonMMSharedConfig a _ _ _ _ _ _ _) = a
 
 type family KeepRead (c :: AvalonMMSharedConfig) where
-  KeepRead ('AvalonMMSharedConfig _ a _ _ _ _ _ _ _) = a
+  KeepRead ('AvalonMMSharedConfig _ a _ _ _ _ _ _) = a
 
 type family KeepWrite (c :: AvalonMMSharedConfig) where
-  KeepWrite ('AvalonMMSharedConfig _ _ a _ _ _ _ _ _) = a
+  KeepWrite ('AvalonMMSharedConfig _ _ a _ _ _ _ _) = a
 
 type family ByteEnableWidth (c :: AvalonMMSharedConfig) where
-  ByteEnableWidth ('AvalonMMSharedConfig _ _ _ a _ _ _ _ _) = a
+  ByteEnableWidth ('AvalonMMSharedConfig _ _ _ a _ _ _ _) = a
 
 type family BurstCountWidth (c :: AvalonMMSharedConfig) where
-  BurstCountWidth ('AvalonMMSharedConfig _ _ _ _ a _ _ _ _) = a
-
-type family KeepWaitRequest (c :: AvalonMMSharedConfig) where
-  KeepWaitRequest ('AvalonMMSharedConfig _ _ _ _ _ a _ _ _) = a
+  BurstCountWidth ('AvalonMMSharedConfig _ _ _ _ a _ _ _) = a
 
 type family KeepReadDataValid (c :: AvalonMMSharedConfig) where
-  KeepReadDataValid ('AvalonMMSharedConfig _ _ _ _ _ _ a _ _) = a
+  KeepReadDataValid ('AvalonMMSharedConfig _ _ _ _ _ a _ _) = a
 
 type family KeepEndOfPacket (c :: AvalonMMSharedConfig) where
-  KeepEndOfPacket ('AvalonMMSharedConfig _ _ _ _ _ _ _ a _) = a
+  KeepEndOfPacket ('AvalonMMSharedConfig _ _ _ _ _ _ a _) = a
 
 type family KeepIrq (c :: AvalonMMSharedConfig) where
-  KeepIrq ('AvalonMMSharedConfig _ _ _ _ _ _ _ _ a) = a
+  KeepIrq ('AvalonMMSharedConfig _ _ _ _ _ _ _ a) = a
 
 
 type family WriteByteEnableWidth (c :: AvalonMMSlaveConfig) where
-  WriteByteEnableWidth ('AvalonMMSlaveConfig a _ _ _ _ _ _) = a
+  WriteByteEnableWidth ('AvalonMMSlaveConfig a _ _ _ _ _ _ _) = a
 
 type family KeepChipSelect (c :: AvalonMMSlaveConfig) where
-  KeepChipSelect ('AvalonMMSlaveConfig _ a _ _ _ _ _) = a
+  KeepChipSelect ('AvalonMMSlaveConfig _ a _ _ _ _ _ _) = a
 
 type family KeepBeginTransfer (c :: AvalonMMSlaveConfig) where
-  KeepBeginTransfer ('AvalonMMSlaveConfig _ _ a _ _ _ _) = a
+  KeepBeginTransfer ('AvalonMMSlaveConfig _ _ a _ _ _ _ _) = a
+
+type family KeepWaitRequest (c :: AvalonMMSlaveConfig) where
+  KeepWaitRequest ('AvalonMMSlaveConfig _ _ _ a _ _ _ _) = a
 
 type family KeepBeginBurstTransfer (c :: AvalonMMSlaveConfig) where
-  KeepBeginBurstTransfer ('AvalonMMSlaveConfig _ _ _ a _ _ _) = a
+  KeepBeginBurstTransfer ('AvalonMMSlaveConfig _ _ _ _ a _ _ _) = a
 
 type family KeepReadyForData (c :: AvalonMMSlaveConfig) where
-  KeepReadyForData ('AvalonMMSlaveConfig _ _ _ _ a _ _) = a
+  KeepReadyForData ('AvalonMMSlaveConfig _ _ _ _ _ a _ _) = a
 
 type family KeepDataAvailable (c :: AvalonMMSlaveConfig) where
-  KeepDataAvailable ('AvalonMMSlaveConfig _ _ _ _ _ a _) = a
+  KeepDataAvailable ('AvalonMMSlaveConfig _ _ _ _ _ _ a _) = a
 
 type family SShared (c :: AvalonMMSlaveConfig) where
-  SShared ('AvalonMMSlaveConfig _ _ _ _ _ _ a) = a
+  SShared ('AvalonMMSlaveConfig _ _ _ _ _ _ _ a) = a
 
 
 type family KeepFlush (c :: AvalonMMMasterConfig) where
@@ -163,9 +163,8 @@ class
   ( KnownNat      (AddrWidth         config)
   , KeepBoolClass (KeepRead          config)
   , KeepBoolClass (KeepWrite         config)
-  , ByteEnClass   (ByteEnableWidth   config)
-  , KnownNat      (BurstCountWidth   config)
-  , KeepBoolClass (KeepWaitRequest   config)
+  , MaybeZeroNat  (ByteEnableWidth   config)
+  , MaybeZeroNat  (BurstCountWidth   config)
   , KeepBoolClass (KeepReadDataValid config)
   , KeepBoolClass (KeepEndOfPacket   config)
   , KeepBoolClass (KeepIrq           config)
@@ -174,27 +173,28 @@ instance
   ( KnownNat      (AddrWidth         config)
   , KeepBoolClass (KeepRead          config)
   , KeepBoolClass (KeepWrite         config)
-  , ByteEnClass   (ByteEnableWidth   config)
-  , KnownNat      (BurstCountWidth   config)
-  , KeepBoolClass (KeepWaitRequest   config)
+  , MaybeZeroNat  (ByteEnableWidth   config)
+  , MaybeZeroNat  (BurstCountWidth   config)
   , KeepBoolClass (KeepReadDataValid config)
   , KeepBoolClass (KeepEndOfPacket   config)
   , KeepBoolClass (KeepIrq           config)
   ) => GoodMMSharedConfig config
 
 class
-  ( ByteEnClass   (WriteByteEnableWidth   config)
+  ( MaybeZeroNat  (WriteByteEnableWidth   config)
   , KeepBoolClass (KeepChipSelect         config)
   , KeepBoolClass (KeepBeginTransfer      config)
+  , KeepBoolClass (KeepWaitRequest        config)
   , KeepBoolClass (KeepBeginBurstTransfer config)
   , KeepBoolClass (KeepReadyForData       config)
   , KeepBoolClass (KeepDataAvailable      config)
   , GoodMMSharedConfig (SShared           config)
   ) => GoodMMSlaveConfig config
 instance
-  ( ByteEnClass   (WriteByteEnableWidth   config)
+  ( MaybeZeroNat  (WriteByteEnableWidth   config)
   , KeepBoolClass (KeepChipSelect         config)
   , KeepBoolClass (KeepBeginTransfer      config)
+  , KeepBoolClass (KeepWaitRequest        config)
   , KeepBoolClass (KeepBeginBurstTransfer config)
   , KeepBoolClass (KeepReadyForData       config)
   , KeepBoolClass (KeepDataAvailable      config)
@@ -246,7 +246,7 @@ deriving instance (GoodMMMasterConfig config,
 
 data AvalonMasterIn config readDataType
   =  AvalonMasterIn
-  { mi_waitRequest   :: KeepBool (KeepWaitRequest   (MShared config))
+  { mi_waitRequest   :: Bool
   , mi_readDataValid :: KeepBool (KeepReadDataValid (MShared config))
   , mi_endOfPacket   :: KeepBool (KeepEndOfPacket   (MShared config))
   , mi_irq           :: KeepBool (KeepIrq           (MShared config))
@@ -275,10 +275,10 @@ deriving instance (GoodMMMasterConfig config,
 
 data AvalonSlaveOut config readDataType
   =  AvalonSlaveOut
-  { so_waitRequest   :: KeepBool (KeepWaitRequest   (SShared config))
-  , so_readDataValid :: KeepBool (KeepReadDataValid (SShared config))
+  { so_readDataValid :: KeepBool (KeepReadDataValid (SShared config))
   , so_endOfPacket   :: KeepBool (KeepEndOfPacket   (SShared config))
   , so_irq           :: KeepBool (KeepIrq           (SShared config))
+  , so_waitRequest   :: KeepBool (KeepWaitRequest            config)
   , so_readyForData  :: KeepBool (KeepReadyForData           config)
   , so_dataAvailable :: KeepBool (KeepDataAvailable          config)
   , so_readData      :: readDataType
@@ -354,12 +354,17 @@ avalonInterconnectFabric ::
 avalonInterconnectFabric slaveAddrFns irqNums = Circuit cktFn where
   cktFn (inpA, inpB) = (unbundle otpA, unbundle otpB) where (otpA, otpB) = unbundle $ mealy transFn s0 $ bundle (bundle inpA, bundle inpB)
 
-  s0 = ()
-  transFn () (mo, so) = ((), (setIrq . maybe mmMasterInNoData (\n -> convSoMi (so !! n)) <$> ms, maybe mmSlaveInNoData (convMoSi . (mo !!)) <$> sm)) where
-    (ms, sm) = masterSlavePairings mo
+  s0 = (repeat Nothing, repeat Nothing)
+
+  -- xferSt is indexed by slave
+  transFn (smOld, xferSt) (mo, so) = ((sm, xferSt'), (mi, si)) where
+    (ms, sm) = masterSlavePairings mo smOld xferSt
     mirq = minIrq so
     irqList = fromKeepBool False . so_irq <$> so
-    setIrq mi = mi { mi_irq = toKeepBool (Maybe.isJust mirq), mi_irqList = unpack $ resize $ pack irqList, mi_irqNumber = Maybe.fromMaybe 0 mirq }
+    setIrq miMsg = miMsg { mi_irq = toKeepBool (Maybe.isJust mirq), mi_irqList = unpack $ resize $ pack irqList, mi_irqNumber = Maybe.fromMaybe 0 mirq }
+    mi = setIrq . maybe mmMasterInNoData (\n -> convSoMi (so !! n) (xferSt !! n)) <$> ms
+    si = maybe (const mmSlaveInNoData) (\n -> convMoSi (mo !! n)) <$> sm <*> xferSt
+    xferSt' = modifySt <$> (fmap (mo !!) <$> sm) <*> so <*> xferSt
 
   minIrq so = fold minJust $ irqNum <$> so <*> irqNums where
     minJust (Just a) (Just b) | a < b = Just a
@@ -368,12 +373,30 @@ avalonInterconnectFabric slaveAddrFns irqNums = Circuit cktFn where
 
     irqNum soMsg num = if fromKeepBool False (so_irq soMsg) then Just num else Nothing
 
-  -- TODO what if 2 masters put in same slave addr
-  masterSlavePairings mo = ((\moMsg -> findIndex ($ mo_addr moMsg) slaveAddrFns) <$> mo, (\addrFn -> findIndex (addrFn . mo_addr) mo) <$> slaveAddrFns)
+  masterSlavePairings mo smOld xferSt = (ms, sm) where
+    smOld' = (\smOldElem addrFn xferStI -> smOldElem >>= keepSM addrFn xferStI) <$> smOld <*> slaveAddrFns <*> xferSt
+    keepSM addrFn xferStI idx = if (moIsOn (mo !! idx) && addrFn (mo_addr (mo !! idx))) || Maybe.isJust xferStI then Just idx else Nothing
+    smCurr = (\addrFn -> findIndex (addrFn . mo_addr) mo) <$> slaveAddrFns
+    sm = (<|>) <$> smOld' <*> smCurr
+    ms = flip elemIndex sm . Just <$> iterateI (+ 1) 0
 
-  convSoMi so
+  moIsOn mo = (fromKeepBool True (mo_read mo) || fromKeepBool True (mo_write mo)) && (0 /= fromMaybeEmptyNum 1 (mo_byteEnable mo))
+
+  modifySt Nothing _ _ = Nothing
+  modifySt (Just mo) so st = modifySt' so (Maybe.fromMaybe (0 :: Unsigned 8,
+                                           mo_burstCount mo,
+                                           errorX "interconnect fabric: this gets overwritten later"
+                                           ) st)
+  modifySt' so (ctr, ctr2, _) = modifySt'' (optDecStCtr so $ if not (fromKeepBool False $ so_waitRequest so) then ctr+1 else ctr,
+                                            optDecStCtr so ctr2,
+                                            fromKeepBool False $ so_waitRequest so)
+  optDecStCtr so ctr = if (ctr /= 0) && (fromKeepBool True $ so_readDataValid so) then ctr-1 else ctr
+  modifySt'' (0, 0, _) = Nothing
+  modifySt'' st = Just st
+
+  convSoMi so st
     = AvalonMasterIn
-    { mi_waitRequest   = convKeepBool False (so_waitRequest so)
+    { mi_waitRequest   = toKeepBool $ (Maybe.maybe True (\(_,_,cnt) -> cnt < maxBound) st) && (fromKeepBool False (so_waitRequest so))
     , mi_readDataValid = convKeepBool False (so_readDataValid so)
     , mi_endOfPacket   = convKeepBool False (so_endOfPacket so)
     , mi_irq           = errorX "interconnect fabric: this value gets overwritten later"
@@ -382,8 +405,8 @@ avalonInterconnectFabric slaveAddrFns irqNums = Circuit cktFn where
     , mi_readData      = so_readData so
     }
 
-  convMoSi mo
-    =  AvalonSlaveIn
+  convMoSi mo st
+    = AvalonSlaveIn
     { si_addr               = mo_addr mo
     , si_read               = toKeepBool $ fromKeepBool True (mo_read  mo) && not (fromKeepBool False (mo_write mo))
     , si_write              = toKeepBool $ fromKeepBool True (mo_write mo) && not (fromKeepBool False (mo_read  mo))
@@ -391,8 +414,8 @@ avalonInterconnectFabric slaveAddrFns irqNums = Circuit cktFn where
     , si_burstCount         = mo_burstCount mo
     , si_chipSelect         = toKeepBool True
     , si_byteEnable         = resize $ mo_byteEnable mo
-    , si_beginTransfer      = errorX "TODO"
-    , si_beginBurstTransfer = errorX "TODO"
+    , si_beginTransfer      = toKeepBool $ Maybe.maybe True (\(_,_,lastWaitReq) -> lastWaitReq) st
+    , si_beginBurstTransfer = toKeepBool $ Maybe.isNothing st
     , si_writeData          = mo_writeData mo
     }
 
@@ -502,14 +525,14 @@ mmSlaveInToMaybe si = if cond then Just (si_writeData si) else Nothing where
   cond =  fromKeepBool True (si_chipSelect si)
        && fromKeepBool True (si_write si)
        && not (fromKeepBool False (si_read si))
-       && not (byteEnableNull (si_byteEnable si))
-       && not (byteEnableNull (si_writeByteEnable si))
+       && 0 /= fromMaybeEmptyNum 1 (si_byteEnable si)
+       && 0 /= fromMaybeEmptyNum 1 (si_writeByteEnable si)
 
 mmMasterOutToMaybe :: (GoodMMMasterConfig config) => AvalonMasterOut config writeDataType -> Maybe writeDataType
 mmMasterOutToMaybe mo = if cond then Just (mo_writeData mo) else Nothing where
   cond =  fromKeepBool True (mo_write mo)
        && not (fromKeepBool False (mo_read mo))
-       && not (byteEnableNull (mo_byteEnable mo))
+       && 0 /= fromMaybeEmptyNum 1 (mo_byteEnable mo)
 
 -- TODO rename master to whatever they changed it to
 data AvalonMMMaster (dom :: Domain) (config :: AvalonMMMasterConfig) (readDataType :: Type) (writeDataType :: Type) = AvalonMMMaster
