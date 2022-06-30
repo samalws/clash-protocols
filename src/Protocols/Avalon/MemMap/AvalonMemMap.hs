@@ -358,7 +358,7 @@ avalonInterconnectFabric slaveAddrFns irqNums fixedWaitTime = Circuit cktFn wher
   s0 = (repeat Nothing, repeat Nothing)
 
   -- xferSt is indexed by slave
-  -- xferSt: Vec (Maybe (ctr: num waitrequest=false&read=true - num readdatavalid=true, ctr2: xfers left in burst (dec on readdatavalid=true OR waitrequest=false&write=true), ctr3: fixed wait time left (dec always, loop around on good message), ready for transfer (becomes True on waitrequest=false and ctr3=0, False on good message)))
+  -- xferSt: Vec (Maybe (ctr1: num waitrequest=false&read=true - num readdatavalid=true, ctr2: xfers left in burst (dec on readdatavalid=true OR waitrequest=false&write=true), ctr3: fixed wait time left (dec always, loop around on good message), ready for transfer (becomes True on waitrequest=false and ctr3=0, False on good message)))
   transFn (smOld, xferSt) (mo, so) = ((sm, xferSt'), (mi, si)) where
     (ms, sm) = masterSlavePairings mo smOld xferSt
     mirq = minIrq so
@@ -392,13 +392,14 @@ avalonInterconnectFabric slaveAddrFns irqNums fixedWaitTime = Circuit cktFn wher
                                                                mo_burstCount mo,
                                                                _0 fixedWaitTime,
                                                                False) st)
-  modifySt' mo so (ctr, ctr2, ctr3, readyForTransfer) = modifySt'' (optDecStCtr so $ if incCtr1 mo so then ctr+1 else ctr,
-                                                                    optDecCtr2 mo so ctr2,
-                                                                    modifyCounter3 mo ctr3,
-                                                                    modifyReadyForTransfer mo so ctr3 readyForTransfer)
-  incCtr1 mo so = moIsRead mo && not (fromKeepBool False (so_waitRequest so))
-  optDecCtr2 mo so ctr = if (moIsWrite mo && not (fromKeepBool False (so_waitRequest so)) && ctr /= 0) then ctr-1 else optDecStCtr so ctr
-  optDecStCtr so ctr = if (ctr /= 0) && (fromKeepBool True $ so_readDataValid so) then ctr-1 else ctr
+  modifySt' mo so (ctr1, ctr2, ctr3, readyForTransfer) = modifySt'' (optDecCtr so $ optIncCtr1 mo so ctr1,
+                                                                     optDecCtr2 mo so ctr2,
+                                                                     modifyCounter3 mo ctr3,
+                                                                     modifyReadyForTransfer mo so ctr3 readyForTransfer)
+  optIncCtr1 mo so ctr1 = if shouldIncCtr1 mo so then ctr1+1 else ctr1
+  shouldIncCtr1 mo so = moIsRead mo && not (fromKeepBool False (so_waitRequest so))
+  optDecCtr2 mo so ctr2 = if (moIsWrite mo && not (fromKeepBool False (so_waitRequest so)) && ctr2 /= 0) then ctr2-1 else optDecCtr so ctr2
+  optDecCtr so ctr = if (ctr /= 0) && (fromKeepBool True $ so_readDataValid so) then ctr-1 else ctr
   modifyCounter3 mo 0 = if moIsOn mo then maxBound else 0
   modifyCounter3 _ n = n-1
   modifyReadyForTransfer mo so ctr3 readyForTransfer
@@ -412,7 +413,7 @@ avalonInterconnectFabric slaveAddrFns irqNums fixedWaitTime = Circuit cktFn wher
 
   convSoMi so st
     = AvalonMasterIn
-    { mi_waitRequest   = Maybe.maybe True (\(ctr,_,ctr3,_) -> ctr < maxBound && ctr3 == 0) st && (fromKeepBool False (so_waitRequest so))
+    { mi_waitRequest   = Maybe.maybe True (\(ctr1,_,ctr3,_) -> ctr1 < maxBound && ctr3 == 0) st && (fromKeepBool False (so_waitRequest so))
     , mi_readDataValid = convKeepBool False (so_readDataValid so)
     , mi_endOfPacket   = convKeepBool False (so_endOfPacket so)
     , mi_irq           = errorX "interconnect fabric: this value gets overwritten later"
