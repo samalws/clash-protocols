@@ -358,7 +358,7 @@ avalonInterconnectFabric slaveAddrFns irqNums fixedWaitTime = Circuit cktFn wher
   s0 = (repeat Nothing, repeat Nothing)
 
   -- xferSt is indexed by slave
-  -- xferSt: Vec (Maybe (ctr: num waitrequest=false - num readdatavalid=true, ctr2: xfers left in burst (dec on readdatavalid=true), ctr3: fixed wait time left (dec always, loop around on good message), ready for transfer (becomes True on waitrequest=false and ctr3=0, False on good message)))
+  -- xferSt: Vec (Maybe (ctr: num waitrequest=false&read=true - num readdatavalid=true, ctr2: xfers left in burst (dec on readdatavalid=true OR waitrequest=false&write=true), ctr3: fixed wait time left (dec always, loop around on good message), ready for transfer (becomes True on waitrequest=false and ctr3=0, False on good message)))
   transFn (smOld, xferSt) (mo, so) = ((sm, xferSt'), (mi, si)) where
     (ms, sm) = masterSlavePairings mo smOld xferSt
     mirq = minIrq so
@@ -377,22 +377,27 @@ avalonInterconnectFabric slaveAddrFns irqNums fixedWaitTime = Circuit cktFn wher
 
   masterSlavePairings mo smOld xferSt = (ms, sm) where
     smOld' = (\smOldElem addrFn xferStI -> smOldElem >>= keepSM addrFn xferStI) <$> smOld <*> slaveAddrFns <*> xferSt
-    keepSM addrFn xferStI idx = if (moIsOn (mo !! idx) && addrFn (mo_addr (mo !! idx))) || Maybe.isJust xferStI then Just idx else Nothing
-    smCurr = (\addrFn -> findIndex (addrFn . mo_addr) mo) <$> slaveAddrFns
+    keepSM addrFn xferStI idx = if (moGood addrFn (mo !! idx)) || Maybe.isJust xferStI then Just idx else Nothing
+    smCurr = (\addrFn -> findIndex (moGood addrFn) mo) <$> slaveAddrFns
+    moGood addrFn moMsg = moIsOn moMsg && addrFn (mo_addr moMsg)
     sm = (<|>) <$> smOld' <*> smCurr
     ms = flip elemIndex sm . Just <$> iterateI (+ 1) 0
 
   moIsOn mo = (fromKeepBool True (mo_read mo) || fromKeepBool True (mo_write mo)) && (0 /= fromMaybeEmptyNum 1 (mo_byteEnable mo))
+  moIsRead mo = moIsOn mo && fromKeepBool True (mo_read mo) && not (fromKeepBool False (mo_write mo))
+  moIsWrite mo = moIsOn mo && fromKeepBool True (mo_write mo) && not (fromKeepBool False (mo_read mo))
 
   modifySt Nothing _ _ = Nothing
   modifySt (Just mo) so st = modifySt' mo so (Maybe.fromMaybe (0 :: Unsigned 8,
                                                                mo_burstCount mo,
                                                                _0 fixedWaitTime,
                                                                False) st)
-  modifySt' mo so (ctr, ctr2, ctr3, readyForTransfer) = modifySt'' (optDecStCtr so $ if not (fromKeepBool False $ so_waitRequest so) then ctr+1 else ctr,
-                                                                    optDecStCtr so ctr2,
+  modifySt' mo so (ctr, ctr2, ctr3, readyForTransfer) = modifySt'' (optDecStCtr so $ if incCtr1 mo so then ctr+1 else ctr,
+                                                                    optDecCtr2 mo so ctr2,
                                                                     modifyCounter3 mo ctr3,
                                                                     modifyReadyForTransfer mo so ctr3 readyForTransfer)
+  incCtr1 mo so = moIsRead mo && not (fromKeepBool False (so_waitRequest so))
+  optDecCtr2 mo so ctr = if (moIsWrite mo && not (fromKeepBool False (so_waitRequest so)) && ctr /= 0) then ctr-1 else optDecStCtr so ctr
   optDecStCtr so ctr = if (ctr /= 0) && (fromKeepBool True $ so_readDataValid so) then ctr-1 else ctr
   modifyCounter3 mo 0 = if moIsOn mo then maxBound else 0
   modifyCounter3 _ n = n-1
@@ -402,12 +407,12 @@ avalonInterconnectFabric slaveAddrFns irqNums fixedWaitTime = Circuit cktFn wher
     | otherwise = readyForTransfer
   modifySt'' (0, 0, 0, _) = Nothing
   modifySt'' st = Just st
-  _0 :: (KnownNat n) => SNat n -> Index n
+  _0 :: (KnownNat n) => SNat n -> Index (n+1)
   _0 _ = 0
 
   convSoMi so st
     = AvalonMasterIn
-    { mi_waitRequest   = toKeepBool $ (Maybe.maybe True (\(ctr,_,ctr3,_) -> ctr < maxBound && ctr3 == 0) st) && (fromKeepBool False (so_waitRequest so))
+    { mi_waitRequest   = Maybe.maybe True (\(ctr,_,ctr3,_) -> ctr < maxBound && ctr3 == 0) st && (fromKeepBool False (so_waitRequest so))
     , mi_readDataValid = convKeepBool False (so_readDataValid so)
     , mi_endOfPacket   = convKeepBool False (so_endOfPacket so)
     , mi_irq           = errorX "interconnect fabric: this value gets overwritten later"
@@ -445,8 +450,8 @@ boolToMMSlaveAck ack
 
 boolToMMMasterAck :: (GoodMMMasterConfig config) => Bool -> AvalonMasterIn config readDataType
 boolToMMMasterAck ack
-  =  AvalonMasterIn
-  { mi_waitRequest   = toKeepBool (not ack)
+  = AvalonMasterIn
+  { mi_waitRequest   = not ack
   , mi_readDataValid = toKeepBool False
   , mi_endOfPacket   = toKeepBool False
   , mi_irq           = toKeepBool False
@@ -458,7 +463,7 @@ boolToMMMasterAck ack
 mmMasterInNoData :: (GoodMMMasterConfig config) => AvalonMasterIn config readDataType
 mmMasterInNoData
   = AvalonMasterIn
-  { mi_waitRequest   = toKeepBool False
+  { mi_waitRequest   = False
   , mi_readDataValid = toKeepBool False
   , mi_endOfPacket   = toKeepBool False
   , mi_irq           = toKeepBool False
@@ -498,7 +503,7 @@ mmSlaveOutToBool :: (GoodMMSlaveConfig config) => AvalonSlaveOut config readData
 mmSlaveOutToBool so = fromKeepBool True (so_readyForData so) && not (fromKeepBool False (so_waitRequest so))
 
 mmMasterInToBool :: (GoodMMMasterConfig config) => AvalonMasterIn config readDataType -> Bool
-mmMasterInToBool = not . fromKeepBool False . mi_waitRequest
+mmMasterInToBool = not . mi_waitRequest
 
 mmSlaveInSendingData :: (GoodMMSlaveConfig config) => AvalonSlaveIn config writeDataType
 mmSlaveInSendingData

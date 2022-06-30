@@ -177,6 +177,7 @@ test-suite unittests
   main-is: unittests.hs
   other-modules:
     Tests.Protocols
+    Tests.Protocols.AvalonMM
     Tests.Protocols.Df
     Tests.Protocols.Plugin
 
