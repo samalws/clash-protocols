@@ -29,6 +29,7 @@ import Test.Tasty.TH (testGroupGenerator)
 
 -- clash-protocols (me!)
 import Protocols
+import Protocols.Internal
 import Protocols.Hedgehog
 import Protocols.Fifo (fifo)
 import qualified Protocols.Axi4.Stream.Axi4Stream as AxStream
@@ -184,6 +185,42 @@ prop_avalonstream_avalonmm_fifo_id = propWithModelSingleDomain
                                                ('MM.AvalonMMSharedConfig 1 'True 'True 1 1 'True 'True 'True))
                                              () Int)
   ckt = Circuit (fifo (Proxy @(_,_,Int)) Proxy (C.SNat @10) () 1)
+
+prop_avalonmm_read_fifos_id :: Property
+prop_avalonmm_read_fifos_id = propWithModelSingleDomain
+                              @C.System
+                              defExpectOptions
+                              (DfTest.genData DfTest.genSmallInt)
+                              (C.exposeClockResetEnable id)
+                              (C.exposeClockResetEnable @C.System ckt)
+                              (\a b -> tally a === tally b)
+  where
+  ckt1 :: (C.HiddenClockResetEnable dom) => Circuit
+                                           (Df dom Int)
+                                           (Reverse (MM.AvalonMMSlave dom 0
+                                             ('MM.AvalonMMSlaveConfig 1 'True 'True 'True 'True 'True 'True
+                                               ('MM.AvalonMMSharedConfig 1 'True 'True 1 1 'True 'True 'True))
+                                             Int ()))
+  ckt1 = Circuit (fifo (Proxy @(_,_,Int)) Proxy (C.SNat @10) () 1)
+  ckt2 :: (C.HiddenClockResetEnable dom) => Circuit
+                                           (Reverse (MM.AvalonMMSlave dom 0
+                                             ('MM.AvalonMMSlaveConfig 1 'True 'True 'True 'True 'True 'True
+                                               ('MM.AvalonMMSharedConfig 1 'True 'True 1 1 'True 'True 'True))
+                                             Int ()))
+                                           (Reverse (MM.AvalonMMMaster dom
+                                             ('MM.AvalonMMMasterConfig 'True 1 1
+                                               ('MM.AvalonMMSharedConfig 1 'True 'True 1 1 'True 'True 'True))
+                                             Int ()))
+  ckt2 = reverseCircuit $ MM.avalonInterconnectFabricSingleMember (const True) 0 (C.SNat @0)
+  ckt3 :: (C.HiddenClockResetEnable dom) => Circuit
+                                           (Reverse (MM.AvalonMMMaster dom
+                                             ('MM.AvalonMMMasterConfig 'True 1 1
+                                               ('MM.AvalonMMSharedConfig 1 'True 'True 1 1 'True 'True 'True))
+                                             Int ()))
+                                           (Df dom Int)
+  ckt3 = Circuit (fifo (Proxy @(_,_,Int)) Proxy (C.SNat @10) 1 ())
+  ckt :: (C.HiddenClockResetEnable dom) => Circuit (Df dom Int) (Df dom Int)
+  ckt = ckt1 |> ckt2 |> ckt3
 
 
 tests :: TestTree

@@ -484,7 +484,7 @@ instance (KnownNat depth, GoodMMSlaveConfig config, NFDataX readDataType, NFData
     = let ack = amtLeft < maxBound
     in pure (
     AvalonSlaveOut
-    { so_waitRequest   = toKeepBool ack
+    { so_waitRequest   = toKeepBool (not ack)
     , so_readDataValid = toKeepBool ack
     , so_readyForData  = toKeepBool False
     , so_dataAvailable = toKeepBool ack
