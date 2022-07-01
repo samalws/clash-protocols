@@ -71,6 +71,31 @@ prop_avalon_fabric_id = propWithModelSingleDomain
       () Int))
   ckt = MM.avalonInterconnectFabric (const True C.:> C.Nil) (0 C.:> C.Nil) (C.SNat @0)
 
+prop_avalon_4_fabric_id :: Property
+prop_avalon_4_fabric_id = propWithModelSingleDomain
+                          @C.System
+                          defExpectOptions
+                          (DfTest.genVecData DfTest.genSmallInt)
+                          (C.exposeClockResetEnable id)
+                          (C.exposeClockResetEnable @C.System ckt)
+                          (\a b -> tally (concat . transpose . C.toList $ a) === tally (concat . transpose . C.toList $ b))
+  where
+  ckt :: (C.HiddenClockResetEnable dom) => Circuit
+    (C.Vec 4 (MM.AvalonMMMaster dom
+      ('MM.AvalonMMMasterConfig 'True 2 2
+        ('MM.AvalonMMSharedConfig 2 'True 'True 2 2 'True 'True 'True))
+      () Int))
+    (C.Vec 4 (MM.AvalonMMSlave dom 0
+      ('MM.AvalonMMSlaveConfig 2 'True 'True 'True 'True 'True 'True
+        ('MM.AvalonMMSharedConfig 2 'True 'True 2 2 'True 'True 'True))
+      () Int))
+  ckt = Circuit (\(a,b) ->
+    toSignals
+    (MM.avalonInterconnectFabric ((==) <$> allAddrs) (C.repeat 0) (C.SNat @0))
+    (fmap . modifyAddrFn <$> allAddrs <*> a,b))
+  modifyAddrFn addr mo = mo { MM.mo_addr = addr }
+  allAddrs = (0 C.:> 1 C.:> 2 C.:> 3 C.:> C.Nil)
+
 
 tests :: TestTree
 tests =
