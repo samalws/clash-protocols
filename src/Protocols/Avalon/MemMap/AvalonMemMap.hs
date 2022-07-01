@@ -1,5 +1,10 @@
 {-|
-Types and instance declarations for the Avalon memory mapped protocol.
+Types and instance declarations for the Avalon memory mapped protocol
+(http://www1.cs.columbia.edu/~sedwards/classes/2009/4840/mnl_avalon_spec.pdf).
+Non-required fields can be easily toggled by the user.
+The @data@ and @outputenable@ fields are not supported since we would need bidirectional data ports.
+The @resetrequest@ field is also not supported since this does not get transferred around,
+but rather gets send "outwards" to whoever is controlling the reset signal of the circuit.
 -}
 
 {-# LANGUAGE FlexibleContexts, FlexibleInstances, MultiParamTypeClasses, NamedFieldPuns, TypeFamilyDependencies, UndecidableInstances #-}
@@ -28,12 +33,21 @@ import qualified Protocols.DfLike as DfLike
 import           Protocols.Hedgehog.Internal
 
 
+-- @KeepBool@ allows for optional boolean data.
+-- Depending on the value of @keep@, the data can either be included or left out.
+-- When left out, the data is represented instead as type @()@.
 type family KeepBool (keep :: Bool) = t | t -> keep where
   KeepBool 'True = Bool
   KeepBool 'False = ()
 
+-- We want to define operations on @KeepBool@ that work for both possibilities
+-- (@keep = 'True@ and @keep = 'False@), but we can't pattern match directly.
+-- Instead we need to define a class and instantiate the class for both @'True@ and @'False@.
+-- We also provide requirements for @NFDataX@ etc. so we don't have to write these out later.
 class (NFDataX (KeepBool keep), NFData (KeepBool keep), Show (KeepBool keep), ShowX (KeepBool keep), Eq (KeepBool keep)) => KeepBoolClass (keep :: Bool) where
+  -- Convert an optional bool to a normal bool, given a default value if the field is not included.
   fromKeepBool :: Bool -> KeepBool keep -> Bool
+  -- Convert a normal bool to an optional bool. Either preserves the value or returns @()@.
   toKeepBool   :: Bool -> KeepBool keep
 
 instance KeepBoolClass 'True where
@@ -44,11 +58,21 @@ instance KeepBoolClass 'False where
   fromKeepBool b = const b
   toKeepBool = const ()
 
+-- Convert one optional field to another,
+-- keeping the bool value the same if possible.
+-- If not possible, a default argument is provided.
 convKeepBool :: (KeepBoolClass a, KeepBoolClass b) => Bool -> KeepBool a -> KeepBool b
 convKeepBool b = toKeepBool . fromKeepBool b
 
 
+-- Another class that holds for all possible values.
+-- In this case, we want to grab a number value of width @n@ if @n@ is nonzero.
+-- Otherwise we provide a default value.
 class (KnownNat n) => MaybeZeroNat (n :: Nat) where
+  -- Grab a number value of width @n@ if @n@ is nonzero.
+  -- Otherwise use a default value.
+  -- The output number is size @n+1@ to simplify the definition
+  -- and allow for the @n=0@ case to provide a number.
   fromMaybeEmptyNum :: Unsigned (n+1) -> Unsigned n -> Unsigned (n+1)
 
 instance MaybeZeroNat 0 where
@@ -58,11 +82,17 @@ instance (1 <= n, KnownNat n) => MaybeZeroNat n where
   fromMaybeEmptyNum _ m = resize m
 
 
+-- Class representing @n=m || n=0@.
+-- TODO should we write this out directly instead?
+--      Is there a type level @||@?
 class EqOrZero (n :: Nat) (m :: Nat)
 instance EqOrZero 0 m
 instance EqOrZero m m
 
 
+-- Config needed for both master and slave interfaces.
+-- @Bool@ values represent whether to keep a boolean field or not.
+-- @Nat@ values represent the width of a variable-sized numeric field.
 data AvalonMMSharedConfig
   =  AvalonMMSharedConfig
   { addrWidth         :: Nat
@@ -75,6 +105,10 @@ data AvalonMMSharedConfig
   , keepIrq           :: Bool
   }
 
+-- Config specific to Avalon MM slave interfaces.
+-- @Bool@ values represent whether to keep a boolean field or not.
+-- @Nat@ values represent the width of a variable-sized numeric field.
+-- An @AvalonMMSharedConfig@ is also included for the rest of the fields.
 data AvalonMMSlaveConfig
   =  AvalonMMSlaveConfig
   { writeByteEnableWidth   :: Nat
@@ -87,6 +121,10 @@ data AvalonMMSlaveConfig
   , sShared                :: AvalonMMSharedConfig
   }
 
+-- Config specific to Avalon MM master interfaces.
+-- @Bool@ values represent whether to keep a boolean field or not.
+-- @Nat@ values represent the width of a variable-sized numeric field.
+-- An @AvalonMMSharedConfig@ is also included for the rest of the fields.
 data AvalonMMMasterConfig
   =  AvalonMMMasterConfig
   { keepFlush      :: Bool
@@ -95,6 +133,7 @@ data AvalonMMMasterConfig
   , mShared        :: AvalonMMSharedConfig
   }
 
+-- Grab record fields at the type level:
 
 type family AddrWidth (c :: AvalonMMSharedConfig) where
   AddrWidth ('AvalonMMSharedConfig a _ _ _ _ _ _ _) = a
@@ -159,6 +198,9 @@ type family MShared (c :: AvalonMMMasterConfig) where
   MShared ('AvalonMMMasterConfig _ _ _ a) = a
 
 
+-- Class representing a well-behaved shared config.
+-- This class holds for every possible @AvalonMMSharedConfig@,
+-- but we need to write out the class anyway so that GHC holds.
 class
   ( KnownNat      (AddrWidth         config)
   , KeepBoolClass (KeepRead          config)
@@ -180,6 +222,9 @@ instance
   , KeepBoolClass (KeepIrq           config)
   ) => GoodMMSharedConfig config
 
+-- Class representing a well-behaved slave config.
+-- This class holds for every possible @AvalonMMSlaveConfig@,
+-- but we need to write out the class anyway so that GHC holds.
 class
   ( MaybeZeroNat  (WriteByteEnableWidth   config)
   , KeepBoolClass (KeepChipSelect         config)
@@ -201,6 +246,9 @@ instance
   , GoodMMSharedConfig (SShared           config)
   ) => GoodMMSlaveConfig config
 
+-- Class representing a well-behaved master config.
+-- This class holds for every possible @AvalonMMMasterConfig@,
+-- but we need to write out the class anyway so that GHC holds.
 class
   ( KeepBoolClass (KeepFlush      config)
   , KnownNat      (IrqListWidth   config)
@@ -215,6 +263,8 @@ instance
   ) => GoodMMMasterConfig config
 
 
+-- Data coming out of an Avalon MM master port.
+-- All fields are optional and can be toggled using the config.
 data AvalonMasterOut config writeDataType
   =  AvalonMasterOut
   { mo_addr        :: Unsigned (AddrWidth       (MShared config))
@@ -244,6 +294,9 @@ deriving instance (GoodMMMasterConfig config,
                    => Eq (AvalonMasterOut config writeDataType)
 
 
+-- Data coming into an Avalon MM master port.
+-- Alomst all fields are optional and can be toggled using the config.
+-- WaitRequest is mandatory.
 data AvalonMasterIn config readDataType
   =  AvalonMasterIn
   { mi_waitRequest   :: Bool
@@ -273,6 +326,8 @@ deriving instance (GoodMMMasterConfig config,
                    => Eq (AvalonMasterIn config readDataType)
 
 
+-- Data coming out of an Avalon MM slave port.
+-- All fields are optional and can be toggled using the config.
 data AvalonSlaveOut config readDataType
   =  AvalonSlaveOut
   { so_readDataValid :: KeepBool (KeepReadDataValid (SShared config))
@@ -302,6 +357,8 @@ deriving instance (GoodMMSlaveConfig config,
                    => Eq (AvalonSlaveOut config readDataType)
 
 
+-- Data coming into an Avalon MM slave port.
+-- All fields are optional and can be toggled using the config.
 data AvalonSlaveIn config writeDataType
   =  AvalonSlaveIn
   { si_addr               :: Unsigned (AddrWidth              (SShared config))
@@ -333,6 +390,14 @@ deriving instance (GoodMMSlaveConfig config,
                    Eq writeDataType)
                    => Eq (AvalonSlaveIn config writeDataType)
 
+-- Interconnect fabric, which can be used to tie together multiple masters and slaves.
+-- Masters and slaves cannot contact each other directly; this fabric is needed in order to mediate,
+--   since masters and slaves do not have the same data fields.
+-- Parameters:
+-- * slaveAddrFns: functions indicating whether a given address refers to a slave
+-- * irqNums: IRQ numbers for each slave
+-- * fixedWaitTime: SNat representing the length of the fixed wait-state (0 if there is none)
+-- TODO (a,b) where a and b have different types
 avalonInterconnectFabric ::
   ( HiddenClockResetEnable dom
   , KnownNat fixedWaitTime
@@ -353,21 +418,34 @@ avalonInterconnectFabric ::
      (Vec nMaster (AvalonMMMaster dom               masterConfig readDataType writeDataType))
      (Vec nSlave  (AvalonMMSlave  dom fixedWaitTime slaveConfig  readDataType writeDataType))
 avalonInterconnectFabric slaveAddrFns irqNums fixedWaitTime = Circuit cktFn where
+  -- We use a mealy machine, since state is necessary to keep track of which master is connected to which slave.
   cktFn (inpA, inpB) = (unbundle otpA, unbundle otpB) where (otpA, otpB) = unbundle $ mealy transFn s0 $ bundle (bundle inpA, bundle inpB)
 
-  s0 = (repeat Nothing, repeat Nothing)
-
+  -- (sm: which slave was connected to which master last clock cycle, xferSt: state for each master-to-slave connection)
   -- xferSt is indexed by slave
   -- xferSt: Vec (Maybe (ctr1: num waitrequest=false&read=true - num readdatavalid=true, ctr2: xfers left in burst (dec on readdatavalid=true OR waitrequest=false&write=true), ctr3: fixed wait time left (dec always, loop around on good message), ready for transfer (becomes True on waitrequest=false and ctr3=0, False on good message)))
+  -- xferState[slave] = Nothing indicates that slave is not connected to any master
+  s0 = (repeat Nothing, repeat Nothing)
+
+  -- transition function, called every clock cycle
+  -- takes in old state and input, returns new state and output
   transFn (smOld, xferSt) (mo, so) = ((sm, xferSt'), (mi, si)) where
+    -- figure out which slave gets paired with which master, and vice versa
     (ms, sm) = masterSlavePairings mo smOld xferSt
+    -- get the interrupt request number
     mirq = minIrq so
+    -- get the interrupt list (n slaves produce n bools; then resize, padding with zeros)
     irqList = fromKeepBool False . so_irq <$> so
+    -- set IRQ-related fields of a master-in message using the values calculated above
     setIrq miMsg = miMsg { mi_irq = toKeepBool (Maybe.isJust mirq), mi_irqList = unpack $ resize $ pack irqList, mi_irqNumber = Maybe.fromMaybe 0 mirq }
+    -- calculate all master-in messages
     mi = setIrq . maybe mmMasterInNoData (\n -> convSoMi (so !! n) (xferSt !! n)) <$> ms
+    -- calculate all slave-in messages
     si = maybe (const mmSlaveInNoData) (\n -> convMoSi (mo !! n)) <$> sm <*> xferSt
+    -- calculate the next xferStates
     xferSt' = modifySt <$> (fmap (mo !!) <$> sm) <*> so <*> xferSt
 
+  -- out of all slaves with IRQ turned on, return the smallest IRQ number
   minIrq so = fold minJust $ irqNum <$> so <*> irqNums where
     minJust (Just a) (Just b) | a < b = Just a
     minJust (Just a) Nothing = Just a
@@ -375,42 +453,64 @@ avalonInterconnectFabric slaveAddrFns irqNums fixedWaitTime = Circuit cktFn wher
 
     irqNum soMsg num = if fromKeepBool False (so_irq soMsg) then Just num else Nothing
 
+  -- figure out which master is paired with which slave (ms) and vice versa (sm)
+  -- given current master-out messages; previous sm value; and all the xferStates
   masterSlavePairings mo smOld xferSt = (ms, sm) where
+    -- for old sm values, determine if they're still transmitting
     smOld' = (\smOldElem addrFn xferStI -> smOldElem >>= keepSM addrFn xferStI) <$> smOld <*> slaveAddrFns <*> xferSt
+    -- a transmission is still going if the xferState is Just or if the master is still asking to connect
     keepSM addrFn xferStI idx = if (moGood addrFn (mo !! idx)) || Maybe.isJust xferStI then Just idx else Nothing
+    -- get new slave-to-master connections in case a slave is disconnectd and a master wants to connect to it
     smCurr = (\addrFn -> findIndex (moGood addrFn) mo) <$> slaveAddrFns
+    -- given addrFn, does master-out message want to connect to this address?
     moGood addrFn moMsg = moIsOn moMsg && addrFn (mo_addr moMsg)
+    -- make slave-to-master pairings, preferring existing connections
     sm = (<|>) <$> smOld' <*> smCurr
+    -- figure out master-to-slave pairings based on sm
     ms = flip elemIndex sm . Just <$> iterateI (+ 1) 0
 
+  -- mo wants to read or write
   moIsOn mo = (fromKeepBool True (mo_read mo) || fromKeepBool True (mo_write mo)) && (0 /= fromMaybeEmptyNum 1 (mo_byteEnable mo))
+  -- mo wants to read
   moIsRead mo = moIsOn mo && fromKeepBool True (mo_read mo) && not (fromKeepBool False (mo_write mo))
+  -- mo wants to write
   moIsWrite mo = moIsOn mo && fromKeepBool True (mo_write mo) && not (fromKeepBool False (mo_read mo))
 
+  -- modify one xferSt value, given one master-out message and one slave-out message
+  -- if there is no master connected, our state should be Nothing
   modifySt Nothing _ _ = Nothing
+  -- if there is a master connected, give a default value of xferSt if needed, and then call on modifySt' to modify it
   modifySt (Just mo) so st = modifySt' mo so (Maybe.fromMaybe (0 :: Unsigned 8,
                                                                mo_burstCount mo,
                                                                _0 fixedWaitTime,
                                                                False) st)
   modifySt' mo so (ctr1, ctr2, ctr3, readyForTransfer) = modifySt'' (optDecCtr so $ optIncCtr1 mo so ctr1,
                                                                      optDecCtr2 mo so ctr2,
-                                                                     modifyCounter3 mo ctr3,
+                                                                     modifyCtr3 mo ctr3,
                                                                      modifyReadyForTransfer mo so ctr3 readyForTransfer)
+  -- increment ctr1 if we're reading and waitrequest=false
   optIncCtr1 mo so ctr1 = if shouldIncCtr1 mo so then ctr1+1 else ctr1
   shouldIncCtr1 mo so = moIsRead mo && not (fromKeepBool False (so_waitRequest so))
+  -- decrement ctr2 if (we're writing and waitrequest=false) or readdatavalid=true
   optDecCtr2 mo so ctr2 = if (moIsWrite mo && not (fromKeepBool False (so_waitRequest so)) && ctr2 /= 0) then ctr2-1 else optDecCtr so ctr2
+  -- decrement ctr if readdatavalid=true
   optDecCtr so ctr = if (ctr /= 0) && (fromKeepBool True $ so_readDataValid so) then ctr-1 else ctr
-  modifyCounter3 mo 0 = if moIsOn mo then maxBound else 0
-  modifyCounter3 _ n = n-1
+  -- always decrement ctr3; loop around to maxBound if mo is sending something
+  -- this is for fixed wait state interfaces
+  modifyCtr3 mo 0 = if moIsOn mo then maxBound else 0
+  modifyCtr3 _ n = n-1
   modifyReadyForTransfer mo so ctr3 readyForTransfer
     | not (fromKeepBool False (so_waitRequest so)) && ctr3 == 0 = True
     | moIsOn mo = False
     | otherwise = readyForTransfer
+  -- finally, kill the xferSt if all the counters are at 0
   modifySt'' (0, 0, 0, _) = Nothing
   modifySt'' st = Just st
+  -- hack to get a "0" value of the right type
   _0 :: (KnownNat n) => SNat n -> Index (n+1)
   _0 _ = 0
 
+  -- given slave-out message and xferSt, generate master-in message
   convSoMi so st
     = AvalonMasterIn
     { mi_waitRequest   = Maybe.maybe True (\(ctr1,_,ctr3,_) -> ctr1 < maxBound && ctr3 == 0) st && (fromKeepBool False (so_waitRequest so))
@@ -422,6 +522,7 @@ avalonInterconnectFabric slaveAddrFns irqNums fixedWaitTime = Circuit cktFn wher
     , mi_readData      = so_readData so
     }
 
+  -- given master-out message and xferSt, generate slave-in message
   convMoSi mo st
     = AvalonSlaveIn
     { si_addr               = mo_addr mo
@@ -437,6 +538,9 @@ avalonInterconnectFabric slaveAddrFns irqNums fixedWaitTime = Circuit cktFn wher
     }
 
 
+-- Convert a boolean value to an @AvalonSlaveOut@ structure.
+-- The structure gives no read data, no IRQ, etc.
+-- Fields relating to "acknowledging" a write are controlled by the bool input.
 boolToMMSlaveAck :: (GoodMMSlaveConfig config) => Bool -> AvalonSlaveOut config readDataType
 boolToMMSlaveAck ack
   = AvalonSlaveOut
@@ -449,6 +553,9 @@ boolToMMSlaveAck ack
     , so_readData      = errorX "No readData for boolToAck"
     }
 
+-- Convert a boolean value to an @AvalonMasterIn@ structure.
+-- The structure gives no read data, no IRQ, etc.
+-- The @waitRequest@ field is controlled by the (negated) boolean input.
 boolToMMMasterAck :: (GoodMMMasterConfig config) => Bool -> AvalonMasterIn config readDataType
 boolToMMMasterAck ack
   = AvalonMasterIn
@@ -461,6 +568,7 @@ boolToMMMasterAck ack
   , mi_readData      = errorX "No readData for boolToAck"
   }
 
+-- An @AvalonMasterIn@ containing no read data, but not giving a wait request or an IRQ.
 mmMasterInNoData :: (GoodMMMasterConfig config) => AvalonMasterIn config readDataType
 mmMasterInNoData
   = AvalonMasterIn
@@ -473,6 +581,7 @@ mmMasterInNoData
   , mi_readData      = errorX "No read data defined"
   }
 
+-- An @AvalonSlaveIn@ containing no write data, and indicating that no transmission is currently occurring.
 mmSlaveInNoData :: (GoodMMSlaveConfig config) => AvalonSlaveIn config writeDataType
 mmSlaveInNoData
   = AvalonSlaveIn
@@ -488,6 +597,7 @@ mmSlaveInNoData
   , si_writeData          = errorX "No writeData for noData"
   }
 
+-- An @AvalonMasterOut@ containing no write data, and indicating that no transmission is currently occurring.
 mmMasterOutNoData :: (GoodMMMasterConfig config) => AvalonMasterOut config writeDataType
 mmMasterOutNoData
   = AvalonMasterOut
@@ -500,12 +610,18 @@ mmMasterOutNoData
   , mo_writeData   = errorX "No writeData for noData"
   }
 
+-- Grab the "acknowledgement" value from an @AvalonSlaveOut@.
+-- Reasonable defaults are provided for optional fields.
 mmSlaveOutToBool :: (GoodMMSlaveConfig config) => AvalonSlaveOut config readDataType -> Bool
 mmSlaveOutToBool so = fromKeepBool True (so_readyForData so) && not (fromKeepBool False (so_waitRequest so))
 
+-- Grab the "acknowledgement" value from an @AvalonMasterIn@.
+-- Reasonable defaults are provided for optional fields.
 mmMasterInToBool :: (GoodMMMasterConfig config) => AvalonMasterIn config readDataType -> Bool
 mmMasterInToBool = not . mi_waitRequest
 
+-- Default @AvalonSlaveIn@ whose fields indicate that a write transaction is occurring.
+-- The @writeData@ field needs to be filled in with data.
 mmSlaveInSendingData :: (GoodMMSlaveConfig config) => AvalonSlaveIn config writeDataType
 mmSlaveInSendingData
   = AvalonSlaveIn
@@ -521,6 +637,8 @@ mmSlaveInSendingData
   , si_writeData          = errorX "No writeData for mmSlaveInSendingData"
   }
 
+-- Default @AvalonMasterOut@ whose fields indicate that a write transaction is occurring.
+-- The @writeData@ field needs to be filled in with data.
 mmMasterOutSendingData :: (GoodMMMasterConfig config) => AvalonMasterOut config writeDataType
 mmMasterOutSendingData
   = AvalonMasterOut
@@ -534,7 +652,7 @@ mmMasterOutSendingData
   }
 
 
--- | Grab the data from a master-to-slave message, if there is any
+-- Grab the data from an @AvalonSlaveIn@, if there is any.
 mmSlaveInToMaybe :: (GoodMMSlaveConfig config) => AvalonSlaveIn config writeDataType -> Maybe writeDataType
 mmSlaveInToMaybe si = if cond then Just (si_writeData si) else Nothing where
   cond =  fromKeepBool True (si_chipSelect si)
@@ -543,6 +661,7 @@ mmSlaveInToMaybe si = if cond then Just (si_writeData si) else Nothing where
        && 0 /= fromMaybeEmptyNum 1 (si_byteEnable si)
        && 0 /= fromMaybeEmptyNum 1 (si_writeByteEnable si)
 
+-- Grab the data from an @AvalonMasterOut@, if there is any.
 mmMasterOutToMaybe :: (GoodMMMasterConfig config) => AvalonMasterOut config writeDataType -> Maybe writeDataType
 mmMasterOutToMaybe mo = if cond then Just (mo_writeData mo) else Nothing where
   cond =  fromKeepBool True (mo_write mo)
@@ -550,10 +669,13 @@ mmMasterOutToMaybe mo = if cond then Just (mo_writeData mo) else Nothing where
        && 0 /= fromMaybeEmptyNum 1 (mo_byteEnable mo)
 
 -- TODO rename master to whatever they changed it to
+-- TODO support fixed wait time in instances below
+
+-- Datatype for the master end of the Avalon memory-mapped protocol.
 data AvalonMMMaster (dom :: Domain) (config :: AvalonMMMasterConfig) (readDataType :: Type) (writeDataType :: Type) = AvalonMMMaster
 
+-- Datatype for the slave end of the Avalon memory-mapped protocol.
 data AvalonMMSlave (dom :: Domain) (fixedWaitTime :: Nat) (config :: AvalonMMSlaveConfig) (readDataType :: Type) (writeDataType :: Type) = AvalonMMSlave
--- TODO support fixed wait time in instances below
 
 instance Protocol (AvalonMMMaster dom config readDataType writeDataType) where
   type Fwd (AvalonMMMaster dom config readDataType writeDataType) = Signal dom (AvalonMasterOut config writeDataType)
