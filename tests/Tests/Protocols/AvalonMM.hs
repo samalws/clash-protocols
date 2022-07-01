@@ -4,33 +4,16 @@
 module Tests.Protocols.AvalonMM where
 
 -- base
-import Data.Coerce (coerce)
-import Data.Foldable (fold)
-import Data.Maybe (catMaybes, fromMaybe)
-import Data.List (mapAccumL)
-import GHC.Stack (HasCallStack)
 import Prelude
 
 -- clash-prelude
 import qualified Clash.Prelude as C
-import Clash.Prelude (type (<=))
-
--- containers
-import qualified Data.HashMap.Strict as HashMap
 
 -- extra
-import Data.List (transpose, partition)
-
--- deepseq
-import Control.DeepSeq (NFData)
-
--- hashable
-import Data.Hashable (Hashable)
+import Data.List (transpose)
 
 -- hedgehog
 import Hedgehog
-import qualified Hedgehog.Gen as Gen
-import qualified Hedgehog.Range as Range
 
 -- tasty
 import Test.Tasty
