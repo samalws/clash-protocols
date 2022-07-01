@@ -13,8 +13,9 @@ module Protocols.Avalon.MemMap.AvalonMemMap where
 
 -- base
 import           Control.DeepSeq (NFData)
-import           Prelude hiding (not, (&&), (||), repeat, (!!), foldl, unzip)
+import           Prelude hiding (not, (&&), (||), repeat, (!!), foldl, unzip, head)
 
+import           Control.Arrow ((***))
 import qualified Data.Maybe as Maybe
 import           Data.Proxy
 
@@ -397,7 +398,7 @@ deriving instance (GoodMMSlaveConfig config,
 -- * slaveAddrFns: functions indicating whether a given address refers to a slave
 -- * irqNums: IRQ numbers for each slave
 -- * fixedWaitTime: SNat representing the length of the fixed wait-state (0 if there is none)
--- TODO (a,b) where a and b have different types
+-- TODO support (slaveA,slaveB) where a and b have different config
 avalonInterconnectFabric ::
   ( HiddenClockResetEnable dom
   , KnownNat fixedWaitTime
@@ -536,6 +537,27 @@ avalonInterconnectFabric slaveAddrFns irqNums fixedWaitTime = Circuit cktFn wher
     , si_beginBurstTransfer = toKeepBool $ Maybe.isNothing st
     , si_writeData          = mo_writeData mo
     }
+
+-- Interconnect fabric, but there's only one master and one slave.
+-- Vecs are removed for convenience.
+avalonInterconnectFabricSingleMember ::
+  ( HiddenClockResetEnable dom
+  , KnownNat fixedWaitTime
+  , GoodMMMasterConfig masterConfig
+  , GoodMMSlaveConfig  slaveConfig
+  , AddrWidth (MShared masterConfig) ~ AddrWidth (SShared slaveConfig)
+  , EqOrZero (WriteByteEnableWidth slaveConfig)      (ByteEnableWidth (MShared masterConfig))
+  , EqOrZero (ByteEnableWidth (SShared slaveConfig)) (ByteEnableWidth (MShared masterConfig))
+  , BurstCountWidth (MShared masterConfig) ~ BurstCountWidth (SShared slaveConfig)
+  )
+  => (Unsigned (AddrWidth (SShared slaveConfig)) -> Bool)
+  -> Unsigned (IrqNumberWidth masterConfig)
+  -> SNat fixedWaitTime
+  -> Circuit
+     (AvalonMMMaster dom               masterConfig readDataType writeDataType)
+     (AvalonMMSlave  dom fixedWaitTime slaveConfig  readDataType writeDataType)
+avalonInterconnectFabricSingleMember slaveAddrFn irqNum fixedWaitTime
+  = Circuit ((head *** head) . toSignals (avalonInterconnectFabric (singleton slaveAddrFn) (singleton irqNum) fixedWaitTime) . (singleton *** singleton))
 
 
 -- Convert a boolean value to an @AvalonSlaveOut@ structure.

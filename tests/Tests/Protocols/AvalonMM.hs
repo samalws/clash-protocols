@@ -34,25 +34,25 @@ import qualified Tests.Protocols.Df as DfTest
 ---------------------------- TESTS ----------------------------
 ---------------------------------------------------------------
 
-prop_avalon_fabric_id :: Property
-prop_avalon_fabric_id = propWithModelSingleDomain
-                        @C.System
-                        defExpectOptions
-                        (DfTest.genVecData DfTest.genSmallInt)
-                        (C.exposeClockResetEnable id)
-                        (C.exposeClockResetEnable @C.System ckt)
-                        (\a b -> tally (concat . transpose . C.toList $ a) === tally (concat . transpose . C.toList $ b))
+prop_avalon_1_fabric_id :: Property
+prop_avalon_1_fabric_id = propWithModelSingleDomain
+                          @C.System
+                          defExpectOptions
+                          (DfTest.genData DfTest.genSmallInt)
+                          (C.exposeClockResetEnable id)
+                          (C.exposeClockResetEnable @C.System ckt)
+                          (\a b -> tally a === tally b)
   where
   ckt :: (C.HiddenClockResetEnable dom) => Circuit
-    (C.Vec 1 (MM.AvalonMMMaster dom
+    (MM.AvalonMMMaster dom
       ('MM.AvalonMMMasterConfig 'True 1 1
         ('MM.AvalonMMSharedConfig 1 'True 'True 1 1 'True 'True 'True))
-      () Int))
-    (C.Vec 1 (MM.AvalonMMSlave dom 0
+      () Int)
+    (MM.AvalonMMSlave dom 0
       ('MM.AvalonMMSlaveConfig 1 'True 'True 'True 'True 'True 'True
         ('MM.AvalonMMSharedConfig 1 'True 'True 1 1 'True 'True 'True))
-      () Int))
-  ckt = MM.avalonInterconnectFabric (const True C.:> C.Nil) (0 C.:> C.Nil) (C.SNat @0)
+      () Int)
+  ckt = MM.avalonInterconnectFabricSingleMember (const True) 0 (C.SNat @0)
 
 prop_avalon_4_fabric_id :: Property
 prop_avalon_4_fabric_id = propWithModelSingleDomain
