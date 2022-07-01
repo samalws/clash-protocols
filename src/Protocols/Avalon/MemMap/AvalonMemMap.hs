@@ -563,7 +563,7 @@ instance Protocol (AvalonMMSlave dom fixedWaitTime config readDataType writeData
   type Fwd (AvalonMMSlave dom fixedWaitTime config readDataType writeDataType) = Signal dom (AvalonSlaveIn  config writeDataType)
   type Bwd (AvalonMMSlave dom fixedWaitTime config readDataType writeDataType) = Signal dom (AvalonSlaveOut config readDataType)
 
-instance (GoodMMSlaveConfig config) => Backpressure (AvalonMMSlave dom 0 config readDataType writeDataType) where
+instance (GoodMMSlaveConfig config, KeepWaitRequest config ~ 'True) => Backpressure (AvalonMMSlave dom 0 config readDataType writeDataType) where
   boolsToBwd _ = C.fromList_lazy . fmap boolToMMSlaveAck
 
 instance (GoodMMMasterConfig config) => Backpressure (AvalonMMMaster dom config readDataType writeDataType) where
@@ -593,7 +593,7 @@ instance (KnownDomain dom, GoodMMMasterConfig config) => Simulate (AvalonMMMaste
 
   stallC conf (C.head -> (stallAck, stalls)) = DfLike.stall Proxy conf stallAck stalls
 
-instance (KnownDomain dom, GoodMMSlaveConfig config) => Drivable (AvalonMMSlave dom 0 config readDataType writeDataType) where
+instance (KnownDomain dom, GoodMMSlaveConfig config, KeepWaitRequest config ~ 'True) => Drivable (AvalonMMSlave dom 0 config readDataType writeDataType) where
   type ExpectType (AvalonMMSlave dom 0 config readDataType writeDataType) = [writeDataType]
 
   toSimulateType Proxy = fmap (\dat -> mmSlaveInSendingData { si_writeData = dat })
@@ -643,6 +643,7 @@ instance (KnownDomain dom, GoodMMMasterConfig config) => DfLike dom (AvalonMMMas
 
 instance (KnownDomain dom,
           GoodMMSlaveConfig config,
+          KeepWaitRequest config ~ 'True,
           Show writeDataType,
           ShowX writeDataType,
           NFData writeDataType,
