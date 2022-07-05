@@ -63,7 +63,7 @@ class (NFDataX (DfLikeOtpState fwd bwd dat), NFDataX dat) => DfLikeOutput fwd bw
   -- Can update state using State monad
   -- Returns data to output to the port, and whether a data item was taken
   -- The 'Maybe dat' input is allowed to change arbitrarily between clock cycles
-  dfLikeOtpFn :: Proxy (fwd,bwd,dat) -> DfLikeOtpParam fwd bwd dat -> bwd -> Bool -> dat {- TODO Maybe dat -} -> State (DfLikeOtpState fwd bwd dat) (fwd, Bool)
+  dfLikeOtpFn :: Proxy (fwd,bwd,dat) -> DfLikeOtpParam fwd bwd dat -> bwd -> Maybe dat -> State (DfLikeOtpState fwd bwd dat) (fwd, Bool)
 
 
 -- DfLike classes for Df
@@ -81,12 +81,12 @@ instance (NFDataX dat) => DfLikeOutput (Data dat) Ack dat where
   type DfLikeOtpParam (Data dat) Ack dat = ()
   dfLikeOtpS0 _ _ = Nothing
   dfLikeOtpBlank _ _ = NoData
-  dfLikeOtpFn _ _ (Ack ack) ready queueItem = do
+  dfLikeOtpFn _ _ (Ack ack) otpItem = do
     sending <- get
-    retVal <- case (sending, ready) of
+    retVal <- case (sending, otpItem) of
       (Just toSend, _) -> pure (Data toSend, False)
-      (Nothing, True) -> put (Just queueItem) >> pure (Data queueItem, True)
-      (Nothing, False) -> pure (NoData, False)
+      (Nothing, Just oi) -> put (Just oi) >> pure (Data oi, True)
+      (Nothing, Nothing) -> pure (NoData, False)
     shouldReadAck <- gets isJust -- ack might be undefined, so we shouldn't look at it unless we have to
     when (shouldReadAck && ack) $ put Nothing
     pure retVal
@@ -115,11 +115,11 @@ instance (KnownNat idWidth, KnownNat destWidth, NFDataX dataType) =>
 
   dfLikeOtpS0 _ _ = NoAxi4StreamM2S
   dfLikeOtpBlank _ _ = NoAxi4StreamM2S
-  dfLikeOtpFn _ _tdest _ack ready queueItem = do
+  dfLikeOtpFn _ _tdest _ack otpItem = do
     let (Axi4StreamS2M ack) = _ack
     sending <- get
-    popped <- case (sending, ready) of
-      (NoAxi4StreamM2S, True) -> put (Axi4StreamM2S { _tdata = queueItem, _tlast = False, _tid = 0, _tdest, _tuser = () }) >> pure True
+    popped <- case (sending, otpItem) of
+      (NoAxi4StreamM2S, Just oi) -> put (Axi4StreamM2S { _tdata = oi, _tlast = False, _tid = 0, _tdest, _tuser = () }) >> pure True
       _ -> pure False
     toSend <- get
     case toSend of -- ack might be undefined, so we shouldn't look at it unless we have to
@@ -152,14 +152,14 @@ instance (KnownNat errorWidth, KnownNat emptyWidth, KnownNat readyLatency, NFDat
 
   dfLikeOtpS0 _ _ = (repeat False, NoAvalonStreamM2S)
   dfLikeOtpBlank _ _ = NoAvalonStreamM2S
-  dfLikeOtpFn _ _channel _thisAck ready queueItem = do
+  dfLikeOtpFn _ _channel _thisAck otpItem = do
     let AvalonStreamS2M thisAck = _thisAck
     ackQueue' <- gets ((thisAck +>>) . fst)
     let ack = last ackQueue'
     sending <- gets snd
     put (ackQueue', sending)
-    popped <- case (sending, ready) of
-      (NoAvalonStreamM2S, True) -> put (ackQueue', AvalonStreamM2S { _data = queueItem, _channel, _error = 0, _startofpacket = True, _endofpacket = True, _empty = 0 }) >> pure True
+    popped <- case (sending, otpItem) of
+      (NoAvalonStreamM2S, Just oi) -> put (ackQueue', AvalonStreamM2S { _data = oi, _channel, _error = 0, _startofpacket = True, _endofpacket = True, _empty = 0 }) >> pure True
       _ -> pure False
     toSend <- gets snd
     case toSend of -- ack might be undefined, so we shouldn't look at it unless we have to
@@ -217,18 +217,18 @@ instance (GoodMMSlaveConfig config, NFDataX readDataType, NFDataX writeDataType)
 
   dfLikeOtpS0 _ _ = ()
   dfLikeOtpBlank _ _ = boolToMMSlaveAck False
-  dfLikeOtpFn _ addr si ready queueItem
+  dfLikeOtpFn _ addr si otpItem
     = pure (
     AvalonSlaveOut
-    { so_waitRequest   = toKeepBool (not ready)
-    , so_readDataValid = toKeepBool ready
+    { so_waitRequest   = toKeepBool (isNothing otpItem)
+    , so_readDataValid = toKeepBool (isJust otpItem)
     , so_readyForData  = toKeepBool False
-    , so_dataAvailable = toKeepBool ready
+    , so_dataAvailable = toKeepBool (isJust otpItem)
     , so_endOfPacket   = toKeepBool True
     , so_irq           = toKeepBool True
-    , so_readData      = queueItem
+    , so_readData      = fromJust otpItem
     }
-    , ready
+    , isJust otpItem
     && fromKeepBool True (si_chipSelect si)
     && fromKeepBool True (si_read si)
     && 0 /= fromMaybeEmptyNum 1 (si_byteEnable si)
@@ -243,12 +243,12 @@ instance (GoodMMMasterConfig config, NFDataX readDataType, NFDataX writeDataType
 
   dfLikeOtpS0 _ _ = Nothing
   dfLikeOtpBlank _ _ = mmMasterOutNoData
-  dfLikeOtpFn _ addr mi ready queueItem = do
+  dfLikeOtpFn _ addr mi otpItem = do
     sending <- get
-    retVal <- case (sending, ready) of
+    retVal <- case (sending, otpItem) of
       (Just toSend, _) -> pure (mmMasterOutSendingData { mo_writeData = toSend, mo_addr = addr }, False)
-      (Nothing, True) -> put (Just queueItem) >> pure (mmMasterOutSendingData { mo_writeData = queueItem, mo_addr = addr }, True)
-      (Nothing, False) -> pure (mmMasterOutNoData, False)
+      (Nothing, Just oi) -> put (Just oi) >> pure (mmMasterOutSendingData { mo_writeData = oi, mo_addr = addr }, True)
+      (Nothing, Nothing) -> pure (mmMasterOutNoData, False)
     shouldReadAck <- gets isJust -- ack might be undefined, so we shouldn't look at it unless we have to
     when (shouldReadAck && mmMasterInToBool mi) $ put Nothing
     pure retVal
@@ -297,7 +297,7 @@ fifo pxyA pxyB fifoDepth paramA paramB = hideReset circuitFunction where
         -- if we're about to push onto an empty queue, we can pop immediately instead
         (brRead_, amtLeft_) = if (amtLeft == maxBound && isJust maybePush) then (fromJust maybePush, amtLeft') else (brRead, amtLeft)
         -- run the output port state machine
-        ((oB, popped), sB') = runState (dfLikeOtpFn pxyB paramB iB (amtLeft_ < maxBound) brRead_) sB
+        ((oB, popped), sB') = runState (dfLikeOtpFn pxyB paramB iB (if (amtLeft_ < maxBound) then Just brRead_ else Nothing)) sB
         -- adjust blockram read address and amount left
         (rAddr', amtLeft'') = if popped then (incIdxLooping rAddr, amtLeft'+1) else (rAddr, amtLeft')
         brReadAddr = rAddr'
