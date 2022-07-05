@@ -31,7 +31,7 @@ import Test.Tasty.TH (testGroupGenerator)
 import Protocols
 import Protocols.Internal
 import Protocols.Hedgehog
-import Protocols.DfLikeAlternative (fifo)
+import qualified Protocols.DfLikeAlternative as DfLikeAlt
 import qualified Protocols.Axi4.Stream.Axi4Stream as AxStream
 import qualified Protocols.Avalon.Stream.AvalonStream as AvStream
 import qualified Protocols.Avalon.MemMap.AvalonMemMap as MM
@@ -58,7 +58,7 @@ prop_df_fifo_id = propWithModelSingleDomain
                (\a b -> tally a === tally b)
   where
   ckt :: (C.HiddenClockResetEnable dom) => Circuit (Df dom Int) (Df dom Int)
-  ckt = Circuit (fifo (Proxy @(_,_,Int,())) (Proxy @(_,_,(),_)) () () (C.SNat @10))
+  ckt = Circuit (DfLikeAlt.fifo (Proxy @(_,_,Int,())) (Proxy @(_,_,(),_)) () () (C.SNat @10))
 
 prop_axi4stream_fifo_id :: Property
 prop_axi4stream_fifo_id = propWithModelSingleDomain
@@ -70,7 +70,7 @@ prop_axi4stream_fifo_id = propWithModelSingleDomain
                       (\a b -> tally a === tally b)
   where
   ckt :: (C.HiddenClockResetEnable dom) => Circuit (AxStream.Axi4Stream dom 1 1 () (C.Vec 10 AxStream.Axi4StreamByte)) (AxStream.Axi4Stream dom 1 1 () (C.Vec 10 AxStream.Axi4StreamByte))
-  ckt = Circuit (fifo (Proxy @(_,_,(C.Vec 10 AxStream.Axi4StreamByte),())) (Proxy @(_,_,(),_)) () 1 (C.SNat @10))
+  ckt = Circuit (DfLikeAlt.fifo (Proxy @(_,_,(C.Vec 10 AxStream.Axi4StreamByte),())) (Proxy @(_,_,(),_)) () 1 (C.SNat @10))
 
 prop_df_axi4stream_fifo_id :: Property
 prop_df_axi4stream_fifo_id = propWithModelSingleDomain
@@ -82,7 +82,7 @@ prop_df_axi4stream_fifo_id = propWithModelSingleDomain
                       (\a b -> tally a === tally b)
   where
   ckt :: (C.HiddenClockResetEnable dom) => Circuit (Df dom (C.Vec 10 AxStream.Axi4StreamByte)) (AxStream.Axi4Stream dom 1 1 () (C.Vec 10 AxStream.Axi4StreamByte))
-  ckt = Circuit (fifo (Proxy @(_,_,(C.Vec 10 AxStream.Axi4StreamByte),())) (Proxy @(_,_,(),_)) () 1 (C.SNat @10))
+  ckt = Circuit (DfLikeAlt.fifo (Proxy @(_,_,(C.Vec 10 AxStream.Axi4StreamByte),())) (Proxy @(_,_,(),_)) () 1 (C.SNat @10))
 
 prop_axi4stream_df_fifo_id :: Property
 prop_axi4stream_df_fifo_id = propWithModelSingleDomain
@@ -94,7 +94,7 @@ prop_axi4stream_df_fifo_id = propWithModelSingleDomain
                       (\a b -> tally a === tally b)
   where
   ckt :: (C.HiddenClockResetEnable dom) => Circuit (AxStream.Axi4Stream dom 1 1 () (C.Vec 10 AxStream.Axi4StreamByte)) (Df dom (C.Vec 10 AxStream.Axi4StreamByte))
-  ckt = Circuit (fifo (Proxy @(_,_,(C.Vec 10 AxStream.Axi4StreamByte),())) (Proxy @(_,_,(),_)) () () (C.SNat @10))
+  ckt = Circuit (DfLikeAlt.fifo (Proxy @(_,_,(C.Vec 10 AxStream.Axi4StreamByte),())) (Proxy @(_,_,(),_)) () () (C.SNat @10))
 
 prop_avalonstream_fifo_id :: Property
 prop_avalonstream_fifo_id = propWithModelSingleDomain
@@ -106,7 +106,7 @@ prop_avalonstream_fifo_id = propWithModelSingleDomain
                             (\a b -> tally a === tally b)
   where
   ckt :: (C.HiddenClockResetEnable dom) => Circuit (AvStream.AvalonStream dom 0 1 1 1 Int) (AvStream.AvalonStream dom 0 1 1 1 Int)
-  ckt = Circuit (fifo (Proxy @(_,_,Int,())) (Proxy @(_,_,(),_)) () 1 (C.SNat @10))
+  ckt = Circuit (DfLikeAlt.fifo (Proxy @(_,_,Int,())) (Proxy @(_,_,(),_)) () 1 (C.SNat @10))
 
 prop_df_avalonstream_fifo_id :: Property
 prop_df_avalonstream_fifo_id = propWithModelSingleDomain
@@ -118,7 +118,7 @@ prop_df_avalonstream_fifo_id = propWithModelSingleDomain
                                (\a b -> tally a === tally b)
   where
   ckt :: (C.HiddenClockResetEnable dom) => Circuit (Df dom Int) (AvStream.AvalonStream dom 0 1 1 1 Int)
-  ckt = Circuit (fifo (Proxy @(_,_,Int,())) (Proxy @(_,_,(),_)) () 1 (C.SNat @10))
+  ckt = Circuit (DfLikeAlt.fifo (Proxy @(_,_,Int,())) (Proxy @(_,_,(),_)) () 1 (C.SNat @10))
 
 prop_avalonstream_df_fifo_id :: Property
 prop_avalonstream_df_fifo_id = propWithModelSingleDomain
@@ -130,7 +130,7 @@ prop_avalonstream_df_fifo_id = propWithModelSingleDomain
                                (\a b -> tally a === tally b)
   where
   ckt :: (C.HiddenClockResetEnable dom) => Circuit (AvStream.AvalonStream dom 0 1 1 1 Int) (Df dom Int)
-  ckt = Circuit (fifo (Proxy @(_,_,Int,())) (Proxy @(_,_,(),_)) () () (C.SNat @10))
+  ckt = Circuit (DfLikeAlt.fifo (Proxy @(_,_,Int,())) (Proxy @(_,_,(),_)) () () (C.SNat @10))
 
 prop_avalonmm_fifo_id :: Property
 prop_avalonmm_fifo_id = propWithModelSingleDomain
@@ -150,7 +150,7 @@ prop_avalonmm_fifo_id = propWithModelSingleDomain
                                              ('MM.AvalonMMMasterConfig 'True 1 1
                                                ('MM.AvalonMMSharedConfig 1 'True 'True 1 1 'True 'True 'True))
                                              () Int)
-  ckt = Circuit (fifo (Proxy @(_,_,Int,())) (Proxy @(_,_,(),_)) 0 1 (C.SNat @10))
+  ckt = Circuit (DfLikeAlt.fifo (Proxy @(_,_,Int,())) (Proxy @(_,_,(),_)) 0 1 (C.SNat @10))
 
 prop_avalonmm_avalonstream_fifo_id :: Property
 prop_avalonmm_avalonstream_fifo_id = propWithModelSingleDomain
@@ -167,7 +167,7 @@ prop_avalonmm_avalonstream_fifo_id = propWithModelSingleDomain
                                                ('MM.AvalonMMSharedConfig 1 'True 'True 1 1 'True 'True 'True))
                                              () Int)
                                            (AvStream.AvalonStream dom 0 1 1 1 Int)
-  ckt = Circuit (fifo (Proxy @(_,_,Int,())) (Proxy @(_,_,(),_)) 0 1 (C.SNat @10))
+  ckt = Circuit (DfLikeAlt.fifo (Proxy @(_,_,Int,())) (Proxy @(_,_,(),_)) 0 1 (C.SNat @10))
 
 prop_avalonstream_avalonmm_fifo_id :: Property
 prop_avalonstream_avalonmm_fifo_id = propWithModelSingleDomain
@@ -184,7 +184,22 @@ prop_avalonstream_avalonmm_fifo_id = propWithModelSingleDomain
                                              ('MM.AvalonMMMasterConfig 'True 1 1
                                                ('MM.AvalonMMSharedConfig 1 'True 'True 1 1 'True 'True 'True))
                                              () Int)
-  ckt = Circuit (fifo (Proxy @(_,_,Int,())) (Proxy @(_,_,(),_)) () 1 (C.SNat @10))
+  ckt = Circuit (DfLikeAlt.fifo (Proxy @(_,_,Int,())) (Proxy @(_,_,(),_)) () 1 (C.SNat @10))
+
+prop_df_map_inc :: Property
+prop_df_map_inc = DfTest.idWithModelDf' (fmap (+ 1)) (C.withClockResetEnable C.clockGen C.resetGen C.enableGen ckt) where
+  ckt :: (C.HiddenClockResetEnable dom) => Circuit (Df dom Int) (Df dom Int)
+  ckt = Circuit (DfLikeAlt.map (Proxy @(_,_,Int,())) (Proxy @(_,_,(),_)) () () (+1))
+
+prop_df_filter_over_5 :: Property
+prop_df_filter_over_5 = DfTest.idWithModelDf' (filter (> 5)) (C.withClockResetEnable C.clockGen C.resetGen C.enableGen ckt) where
+  ckt :: (C.HiddenClockResetEnable dom) => Circuit (Df dom Int) (Df dom Int)
+  ckt = Circuit (DfLikeAlt.filter (Proxy @(_,_,Int,())) (Proxy @(_,_,(),_)) () () (> 5))
+
+prop_df_mapmaybe_inc_over_5 :: Property
+prop_df_mapmaybe_inc_over_5 = DfTest.idWithModelDf' (map (+ 1) . filter (> 5)) (C.withClockResetEnable C.clockGen C.resetGen C.enableGen ckt) where
+  ckt :: (C.HiddenClockResetEnable dom) => Circuit (Df dom Int) (Df dom Int)
+  ckt = Circuit (DfLikeAlt.mapMaybe (Proxy @(_,_,Int,())) (Proxy @(_,_,(),_)) () () (\n -> if n > 5 then Just (n+1) else Nothing))
 
 
 tests :: TestTree

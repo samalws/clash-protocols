@@ -58,7 +58,7 @@ instance (NFDataX dat) => DfLikeAlternative (Data dat) Ack dat () where
   type DfLikeParam (Data dat) Ack dat () = ()
   dfLikeS0 _ _ = ()
   dfLikeBlank _ _ = Ack False
-  dfLikeFn _ _ (Data inp) True _ = pure (Ack True, Just inp, False)
+  dfLikeFn _ _ (Data inp) ack _ = pure (Ack ack, Just inp, False)
   dfLikeFn _ _ _ _ _ = pure (Ack False, Nothing, False)
 
 instance (NFDataX dat) => DfLikeAlternative Ack (Data dat) () dat where
@@ -88,7 +88,7 @@ instance (KnownNat idWidth, KnownNat destWidth, NFDataX dataType) =>
 
   dfLikeS0 _ _ = ()
   dfLikeBlank _ _ = Axi4StreamS2M { _tready = False }
-  dfLikeFn _ _ (Axi4StreamM2S { _tdata }) True _ = pure (Axi4StreamS2M { _tready = True }, Just _tdata, False)
+  dfLikeFn _ _ (Axi4StreamM2S { _tdata }) ack _ = pure (Axi4StreamS2M { _tready = ack }, Just _tdata, False)
   dfLikeFn _ _ _ _ _ = pure (Axi4StreamS2M { _tready = False }, Nothing, False)
 
 instance (KnownNat idWidth, KnownNat destWidth, NFDataX dataType) =>
@@ -125,7 +125,7 @@ instance (NFDataX dataType) =>
 
   dfLikeS0 _ _ = ()
   dfLikeBlank _ _ = AvalonStreamS2M { _ready = False }
-  dfLikeFn _ _ (AvalonStreamM2S { _data }) True _ = pure (AvalonStreamS2M { _ready = True }, Just _data, False)
+  dfLikeFn _ _ (AvalonStreamM2S { _data }) ack _ = pure (AvalonStreamS2M { _ready = ack }, Just _data, False)
   dfLikeFn _ _ _ _ _ = pure (AvalonStreamS2M { _ready = False }, Nothing, False)
 
 instance (KnownNat errorWidth, KnownNat emptyWidth, KnownNat readyLatency, NFDataX dataType) =>
@@ -166,7 +166,7 @@ instance (GoodMMSlaveConfig config, NFDataX readDataType, NFDataX writeDataType)
 
   dfLikeS0 _ _ = ()
   dfLikeBlank _ _ = boolToMMSlaveAck False
-  dfLikeFn _ addr si True _ | isJust (mmSlaveInToMaybe si) && si_addr si == addr = pure (boolToMMSlaveAck True, mmSlaveInToMaybe si, False)
+  dfLikeFn _ addr si ack _ | isJust (mmSlaveInToMaybe si) && si_addr si == addr = pure (boolToMMSlaveAck ack, mmSlaveInToMaybe si, False)
   dfLikeFn _ _ _ _ _ = pure (boolToMMSlaveAck False, Nothing, False)
 
 -- TODO add in read
@@ -202,9 +202,9 @@ mapMaybe ::
   (datA -> Maybe datB) ->
   (Signal dom inpA, Signal dom inpB) ->
   (Signal dom otpA, Signal dom otpB)
-mapMaybe pxyA pxyB paramA paramB mapFn = unbundle . mealy machineAsFunction s0 . bundle where
+mapMaybe pxyA pxyB paramA paramB mapFn = unbundle . hideReset circuitFunction . bundle where
   s0 = (dfLikeS0 pxyA paramA, dfLikeS0 pxyB paramB)
-  -- TODO reset
+  circuitFunction reset inp = mux (unsafeToHighPolarity reset) (pure (dfLikeBlank pxyA paramA, dfLikeBlank pxyB paramB)) (mealy machineAsFunction s0 inp)
   machineAsFunction (sA, sB) (inpA, inpB) = let
     ((otpA, dat, _), sA') = runState (dfLikeFn pxyA paramA inpA (isJust dat && (ack || isNothing fdat)) Nothing) sA
     ((otpB, _, ack), sB') = runState (dfLikeFn pxyB paramB inpB False fdat) sB
