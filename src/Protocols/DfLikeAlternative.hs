@@ -26,67 +26,49 @@ import           Protocols.Df (Data(..))
 import           Protocols.Internal
 
 
--- Describes how a protocol behaves at the data input end, using a state machine
--- Can take parameters and provide whatever state type you would like
-class (NFDataX (DfLikeInpState fwd bwd dat), NFDataX dat) => DfLikeInput fwd bwd dat where
-  -- | State carried between clock cycles
-  type DfLikeInpState fwd bwd dat
-  -- | User-provided parameters for the dfLike input
-  type DfLikeInpParam fwd bwd dat
-  -- | Initial state, given user params
-  dfLikeInpS0 :: Proxy (fwd,bwd,dat) -> DfLikeInpParam fwd bwd dat -> DfLikeInpState fwd bwd dat
-  -- | Blank input, used when reset is on
-  -- Doesn't look at current state, but can look at user params
-  -- Should not acknowledge any incoming data
-  dfLikeInpBlank :: Proxy (fwd,bwd,dat) -> DfLikeInpParam fwd bwd dat -> bwd
-  -- | State machine run every clock cycle at the dfLike input port
-  -- Given user-provided params; data at the input port; and whether an input can be taken
-  -- Can update state using State monad
-  -- Returns data to output back to the port (usually an acknowledge signal), and Maybe an item that was consumed
-  dfLikeInpFn :: Proxy (fwd,bwd,dat) -> DfLikeInpParam fwd bwd dat -> fwd -> Bool -> State (DfLikeInpState fwd bwd dat) (bwd, Maybe dat)
-
+-- TODO comments are outdated
 -- Describes how a protocol behaves at the data output end, using a state machine
 -- Can take parameters and provide whatever state type you would like
-class (NFDataX (DfLikeOtpState fwd bwd dat), NFDataX dat) => DfLikeOutput fwd bwd dat where
+class (NFDataX (DfLikeState inp otp datInp datOtp), NFDataX datInp, NFDataX datOtp) => DfLikeAlternative inp otp datInp datOtp where
   -- | State carried between clock cycles
-  type DfLikeOtpState fwd bwd dat
+  type DfLikeState inp otp datInp datOtp
   -- | User-provided parameters for the dfLike output
-  type DfLikeOtpParam fwd bwd dat
+  type DfLikeParam inp otp datInp datOtp
   -- | Initial state, given user params
-  dfLikeOtpS0 :: Proxy (fwd,bwd,dat) -> DfLikeOtpParam fwd bwd dat -> DfLikeOtpState fwd bwd dat
+  dfLikeS0 :: Proxy (inp,otp,datInp,datOtp) -> DfLikeParam inp otp datInp datOtp -> DfLikeState inp otp datInp datOtp
   -- | Blank input, used when reset is on
   -- Doesn't look at current state, but can look at user params
-  -- Should not acknowledge any incoming data
-  dfLikeOtpBlank :: Proxy (fwd,bwd,dat) -> DfLikeOtpParam fwd bwd dat -> fwd
+  -- Should not acknowledge any incoming datInp datOtpa
+  dfLikeBlank :: Proxy (inp,otp,datInp,datOtp) -> DfLikeParam inp otp datInp datOtp -> otp
   -- | State machine run every clock cycle at the dfLike output port
-  -- Given user-provided params; data at the output port (usually an acknowledge signal); and Maybe the next data item to output
+  -- Given user-provided params; datInp datOtpa at the output port (usually an acknowledge signal); and Maybe the next datInp datOtpa item to output
   -- Can update state using State monad
-  -- Returns data to output to the port, and whether a data item was taken
-  -- The 'Maybe dat' input is allowed to change arbitrarily between clock cycles
-  dfLikeOtpFn :: Proxy (fwd,bwd,dat) -> DfLikeOtpParam fwd bwd dat -> bwd -> Maybe dat -> State (DfLikeOtpState fwd bwd dat) (fwd, Bool)
+  -- Returns datInp datOtpa to output to the port, and whether a datInp datOtpa item was taken
+  -- The 'Maybe datInp datOtp' input is allowed to change arbitrarily between clock cycles
+  dfLikeFn :: Proxy (inp,otp,datInp,datOtp) -> DfLikeParam inp otp datInp datOtp -> inp -> Bool -> Maybe datOtp -> State (DfLikeState inp otp datInp datOtp) (otp, Maybe datInp, Bool)
 
 
 -- DfLike classes for Df
 
-instance (NFDataX dat) => DfLikeInput (Data dat) Ack dat where
-  type DfLikeInpState (Data dat) Ack dat = ()
-  type DfLikeInpParam (Data dat) Ack dat = ()
-  dfLikeInpS0 _ _ = ()
-  dfLikeInpBlank _ _ = Ack False
-  dfLikeInpFn _ _ (Data inp) True = pure (Ack True, Just inp)
-  dfLikeInpFn _ _ _ _ = pure (Ack False, Nothing)
+instance (NFDataX dat) => DfLikeAlternative (Data dat) Ack dat () where
+  type DfLikeState (Data dat) Ack dat () = ()
+  type DfLikeParam (Data dat) Ack dat () = ()
+  dfLikeS0 _ _ = ()
+  dfLikeBlank _ _ = Ack False
+  dfLikeFn _ _ (Data inp) True _ = pure (Ack True, Just inp, False)
+  dfLikeFn _ _ _ _ _ = pure (Ack False, Nothing, False)
 
-instance (NFDataX dat) => DfLikeOutput (Data dat) Ack dat where
-  type DfLikeOtpState (Data dat) Ack dat = Maybe dat
-  type DfLikeOtpParam (Data dat) Ack dat = ()
-  dfLikeOtpS0 _ _ = Nothing
-  dfLikeOtpBlank _ _ = NoData
-  dfLikeOtpFn _ _ (Ack ack) otpItem = do
+instance (NFDataX dat) => DfLikeAlternative Ack (Data dat) () dat where
+  type DfLikeState Ack (Data dat) () dat = Maybe dat
+  type DfLikeParam Ack (Data dat) () dat = ()
+  dfLikeS0 _ _ = Nothing
+  dfLikeBlank _ _ = NoData
+  dfLikeFn _ _ (Ack ack) _ otpItem = do
     sending <- get
     retVal <- case (sending, otpItem) of
-      (Just toSend, _) -> pure (Data toSend, False)
-      (Nothing, Just oi) -> put (Just oi) >> pure (Data oi, True)
-      (Nothing, Nothing) -> pure (NoData, False)
+      (Just toSend, _) -> pure (Data toSend, Nothing, False)
+      (Nothing, Just oi) -> put (Just oi) >> pure (Data oi, Nothing, True)
+      (Nothing, Nothing) -> pure (NoData, Nothing, False)
     shouldReadAck <- gets isJust -- ack might be undefined, so we shouldn't look at it unless we have to
     when (shouldReadAck && ack) $ put Nothing
     pure retVal
@@ -95,27 +77,27 @@ instance (NFDataX dat) => DfLikeOutput (Data dat) Ack dat where
 -- DfLike classes for Axi4Stream
 
 instance (KnownNat idWidth, KnownNat destWidth, NFDataX dataType) =>
-    DfLikeInput (Axi4StreamM2S idWidth destWidth () dataType) Axi4StreamS2M dataType where
-  type DfLikeInpState (Axi4StreamM2S idWidth destWidth () dataType) Axi4StreamS2M dataType
+    DfLikeAlternative (Axi4StreamM2S idWidth destWidth () dataType) Axi4StreamS2M dataType () where
+  type DfLikeState (Axi4StreamM2S idWidth destWidth () dataType) Axi4StreamS2M dataType ()
     = ()
-  type DfLikeInpParam (Axi4StreamM2S idWidth destWidth () dataType) Axi4StreamS2M dataType
+  type DfLikeParam (Axi4StreamM2S idWidth destWidth () dataType) Axi4StreamS2M dataType ()
     = ()
 
-  dfLikeInpS0 _ _ = ()
-  dfLikeInpBlank _ _ = Axi4StreamS2M { _tready = False }
-  dfLikeInpFn _ _ (Axi4StreamM2S { _tdata }) True = pure (Axi4StreamS2M { _tready = True }, Just _tdata)
-  dfLikeInpFn _ _ _ _ = pure (Axi4StreamS2M { _tready = False }, Nothing)
+  dfLikeS0 _ _ = ()
+  dfLikeBlank _ _ = Axi4StreamS2M { _tready = False }
+  dfLikeFn _ _ (Axi4StreamM2S { _tdata }) True _ = pure (Axi4StreamS2M { _tready = True }, Just _tdata, False)
+  dfLikeFn _ _ _ _ _ = pure (Axi4StreamS2M { _tready = False }, Nothing, False)
 
 instance (KnownNat idWidth, KnownNat destWidth, NFDataX dataType) =>
-    DfLikeOutput (Axi4StreamM2S idWidth destWidth () dataType) Axi4StreamS2M dataType where
-  type DfLikeOtpState (Axi4StreamM2S idWidth destWidth () dataType) Axi4StreamS2M dataType
+    DfLikeAlternative Axi4StreamS2M (Axi4StreamM2S idWidth destWidth () dataType) () dataType where
+  type DfLikeState Axi4StreamS2M (Axi4StreamM2S idWidth destWidth () dataType) () dataType
     = Axi4StreamM2S idWidth destWidth () dataType
-  type DfLikeOtpParam (Axi4StreamM2S idWidth destWidth () dataType) Axi4StreamS2M dataType
+  type DfLikeParam Axi4StreamS2M (Axi4StreamM2S idWidth destWidth () dataType) () dataType
     = Unsigned destWidth
 
-  dfLikeOtpS0 _ _ = NoAxi4StreamM2S
-  dfLikeOtpBlank _ _ = NoAxi4StreamM2S
-  dfLikeOtpFn _ _tdest _ack otpItem = do
+  dfLikeS0 _ _ = NoAxi4StreamM2S
+  dfLikeBlank _ _ = NoAxi4StreamM2S
+  dfLikeFn _ _tdest _ack _ otpItem = do
     let (Axi4StreamS2M ack) = _ack
     sending <- get
     popped <- case (sending, otpItem) of
@@ -125,34 +107,34 @@ instance (KnownNat idWidth, KnownNat destWidth, NFDataX dataType) =>
     case toSend of -- ack might be undefined, so we shouldn't look at it unless we have to
       Axi4StreamM2S{} -> when ack $ put NoAxi4StreamM2S
       _ -> pure ()
-    pure (toSend, popped)
+    pure (toSend, Nothing, popped)
 
 
 -- DfLike classes for AvalonStream
 -- TODO keep ready on when not receiving data?
 
 instance (NFDataX dataType) =>
-    DfLikeInput (AvalonStreamM2S channelWidth errorWidth emptyWidth dataType) (AvalonStreamS2M 0) dataType where
-  type DfLikeInpState (AvalonStreamM2S channelWidth errorWidth emptyWidth dataType) (AvalonStreamS2M 0) dataType
+    DfLikeAlternative (AvalonStreamM2S channelWidth errorWidth emptyWidth dataType) (AvalonStreamS2M 0) dataType () where
+  type DfLikeState (AvalonStreamM2S channelWidth errorWidth emptyWidth dataType) (AvalonStreamS2M 0) dataType ()
     = ()
-  type DfLikeInpParam (AvalonStreamM2S channelWidth errorWidth emptyWidth dataType) (AvalonStreamS2M 0) dataType
+  type DfLikeParam (AvalonStreamM2S channelWidth errorWidth emptyWidth dataType) (AvalonStreamS2M 0) dataType ()
     = ()
 
-  dfLikeInpS0 _ _ = ()
-  dfLikeInpBlank _ _ = AvalonStreamS2M { _ready = False }
-  dfLikeInpFn _ _ (AvalonStreamM2S { _data }) True = pure (AvalonStreamS2M { _ready = True }, Just _data)
-  dfLikeInpFn _ _ _ _ = pure (AvalonStreamS2M { _ready = False }, Nothing)
+  dfLikeS0 _ _ = ()
+  dfLikeBlank _ _ = AvalonStreamS2M { _ready = False }
+  dfLikeFn _ _ (AvalonStreamM2S { _data }) True _ = pure (AvalonStreamS2M { _ready = True }, Just _data, False)
+  dfLikeFn _ _ _ _ _ = pure (AvalonStreamS2M { _ready = False }, Nothing, False)
 
 instance (KnownNat errorWidth, KnownNat emptyWidth, KnownNat readyLatency, NFDataX dataType) =>
-    DfLikeOutput (AvalonStreamM2S channelWidth errorWidth emptyWidth dataType) (AvalonStreamS2M readyLatency) dataType where
-  type DfLikeOtpState (AvalonStreamM2S channelWidth errorWidth emptyWidth dataType) (AvalonStreamS2M readyLatency) dataType
+    DfLikeAlternative (AvalonStreamS2M readyLatency) (AvalonStreamM2S channelWidth errorWidth emptyWidth dataType) () dataType where
+  type DfLikeState (AvalonStreamS2M readyLatency) (AvalonStreamM2S channelWidth errorWidth emptyWidth dataType) () dataType
     = (Vec (readyLatency+1) Bool, AvalonStreamM2S channelWidth errorWidth emptyWidth dataType)
-  type DfLikeOtpParam (AvalonStreamM2S channelWidth errorWidth emptyWidth dataType) (AvalonStreamS2M readyLatency) dataType
+  type DfLikeParam (AvalonStreamS2M readyLatency) (AvalonStreamM2S channelWidth errorWidth emptyWidth dataType) () dataType
     = (Unsigned channelWidth)
 
-  dfLikeOtpS0 _ _ = (repeat False, NoAvalonStreamM2S)
-  dfLikeOtpBlank _ _ = NoAvalonStreamM2S
-  dfLikeOtpFn _ _channel _thisAck otpItem = do
+  dfLikeS0 _ _ = (repeat False, NoAvalonStreamM2S)
+  dfLikeBlank _ _ = NoAvalonStreamM2S
+  dfLikeFn _ _channel _thisAck _ otpItem = do
     let AvalonStreamS2M thisAck = _thisAck
     ackQueue' <- gets ((thisAck +>>) . fst)
     let ack = last ackQueue'
@@ -165,90 +147,39 @@ instance (KnownNat errorWidth, KnownNat emptyWidth, KnownNat readyLatency, NFDat
     case toSend of -- ack might be undefined, so we shouldn't look at it unless we have to
       AvalonStreamM2S{} -> when ack $ put (ackQueue', NoAvalonStreamM2S)
       _ -> pure ()
-    pure (toSend, popped)
+    pure (toSend, Nothing, popped)
 
 
 -- DfLike classes for AvalonMemMap
 -- TODO keep waitrequest on when not receiving data?
 
 instance (GoodMMSlaveConfig config, NFDataX readDataType, NFDataX writeDataType) =>
-    DfLikeInput (AvalonSlaveIn config writeDataType) (AvalonSlaveOut config readDataType) writeDataType where
-  type DfLikeInpState (AvalonSlaveIn config writeDataType) (AvalonSlaveOut config readDataType) writeDataType
+    DfLikeAlternative (AvalonSlaveIn config writeDataType) (AvalonSlaveOut config readDataType) writeDataType () where
+  type DfLikeState (AvalonSlaveIn config writeDataType) (AvalonSlaveOut config readDataType) writeDataType ()
     = ()
-  type DfLikeInpParam (AvalonSlaveIn config writeDataType) (AvalonSlaveOut config readDataType) writeDataType
+  type DfLikeParam (AvalonSlaveIn config writeDataType) (AvalonSlaveOut config readDataType) writeDataType ()
     = Unsigned (AddrWidth (SShared config))
 
-  dfLikeInpS0 _ _ = ()
-  dfLikeInpBlank _ _ = boolToMMSlaveAck False
-  dfLikeInpFn _ addr si True | isJust (mmSlaveInToMaybe si) && si_addr si == addr = pure (boolToMMSlaveAck True, mmSlaveInToMaybe si)
-  dfLikeInpFn _ _ _ _ = pure (boolToMMSlaveAck False, Nothing)
+  dfLikeS0 _ _ = ()
+  dfLikeBlank _ _ = boolToMMSlaveAck False
+  dfLikeFn _ addr si True _ | isJust (mmSlaveInToMaybe si) && si_addr si == addr = pure (boolToMMSlaveAck True, mmSlaveInToMaybe si, False)
+  dfLikeFn _ _ _ _ _ = pure (boolToMMSlaveAck False, Nothing, False)
 
 instance (GoodMMMasterConfig config, NFDataX readDataType, NFDataX writeDataType) =>
-    DfLikeInput (AvalonMasterIn config readDataType) (AvalonMasterOut config writeDataType) readDataType where
-  type DfLikeInpState (AvalonMasterIn config readDataType) (AvalonMasterOut config writeDataType) readDataType
-    = Bool -- ready value last frame
-  type DfLikeInpParam (AvalonMasterIn config readDataType) (AvalonMasterOut config writeDataType) readDataType
-    = Unsigned (AddrWidth (MShared config))
-
-  dfLikeInpS0 _ _ = True
-  dfLikeInpBlank _ _ = mmMasterOutNoData
-
-  dfLikeInpFn _ addr mi ready = do
-    lastReady <- get
-    put ready
-    pure (
-      AvalonMasterOut
-      { mo_addr        = addr
-      , mo_read        = toKeepBool ready
-      , mo_write       = toKeepBool False
-      , mo_byteEnable  = if ready then bitCoerce (repeat True) else 0
-      , mo_burstCount  = if ready then 1 else 0
-      , mo_flush       = toKeepBool False
-      , mo_writeData   = errorX "No writeData for Avalon MM dfLikeInpFn"
-      }
-      , if mi_waitRequest mi && lastReady then Nothing else Just (mi_readData mi))
-
-instance (GoodMMSlaveConfig config, NFDataX readDataType, NFDataX writeDataType) =>
-    DfLikeOutput (AvalonSlaveOut config readDataType) (AvalonSlaveIn config writeDataType) readDataType where
-  type DfLikeOtpState (AvalonSlaveOut config readDataType) (AvalonSlaveIn config writeDataType) readDataType
-    = ()
-  type DfLikeOtpParam (AvalonSlaveOut config readDataType) (AvalonSlaveIn config writeDataType) readDataType
-    = Unsigned (AddrWidth (SShared config))
-
-  dfLikeOtpS0 _ _ = ()
-  dfLikeOtpBlank _ _ = boolToMMSlaveAck False
-  dfLikeOtpFn _ addr si otpItem
-    = pure (
-    AvalonSlaveOut
-    { so_waitRequest   = toKeepBool (isNothing otpItem)
-    , so_readDataValid = toKeepBool (isJust otpItem)
-    , so_readyForData  = toKeepBool False
-    , so_dataAvailable = toKeepBool (isJust otpItem)
-    , so_endOfPacket   = toKeepBool True
-    , so_irq           = toKeepBool True
-    , so_readData      = fromJust otpItem
-    }
-    , isJust otpItem
-    && fromKeepBool True (si_chipSelect si)
-    && fromKeepBool True (si_read si)
-    && 0 /= fromMaybeEmptyNum 1 (si_byteEnable si)
-    && si_addr si == addr)
-
-instance (GoodMMMasterConfig config, NFDataX readDataType, NFDataX writeDataType) =>
-    DfLikeOutput (AvalonMasterOut config writeDataType) (AvalonMasterIn config readDataType) writeDataType where
-  type DfLikeOtpState (AvalonMasterOut config writeDataType) (AvalonMasterIn config readDataType) writeDataType
+    DfLikeAlternative (AvalonMasterIn config readDataType) (AvalonMasterOut config writeDataType) () writeDataType where
+  type DfLikeState (AvalonMasterIn config readDataType) (AvalonMasterOut config writeDataType) () writeDataType
     = Maybe writeDataType
-  type DfLikeOtpParam (AvalonMasterOut config writeDataType) (AvalonMasterIn config readDataType) writeDataType
+  type DfLikeParam (AvalonMasterIn config readDataType) (AvalonMasterOut config writeDataType) () writeDataType
     = Unsigned (AddrWidth (MShared config))
 
-  dfLikeOtpS0 _ _ = Nothing
-  dfLikeOtpBlank _ _ = mmMasterOutNoData
-  dfLikeOtpFn _ addr mi otpItem = do
+  dfLikeS0 _ _ = Nothing
+  dfLikeBlank _ _ = mmMasterOutNoData
+  dfLikeFn _ addr mi _ otpItem = do
     sending <- get
     retVal <- case (sending, otpItem) of
-      (Just toSend, _) -> pure (mmMasterOutSendingData { mo_writeData = toSend, mo_addr = addr }, False)
-      (Nothing, Just oi) -> put (Just oi) >> pure (mmMasterOutSendingData { mo_writeData = oi, mo_addr = addr }, True)
-      (Nothing, Nothing) -> pure (mmMasterOutNoData, False)
+      (Just toSend, _) -> pure (mmMasterOutSendingData { mo_writeData = toSend, mo_addr = addr }, Nothing, False)
+      (Nothing, Just oi) -> put (Just oi) >> pure (mmMasterOutSendingData { mo_writeData = oi, mo_addr = addr }, Nothing, True)
+      (Nothing, Nothing) -> pure (mmMasterOutNoData, Nothing, False)
     shouldReadAck <- gets isJust -- ack might be undefined, so we shouldn't look at it unless we have to
     when (shouldReadAck && mmMasterInToBool mi) $ put Nothing
     pure retVal
@@ -256,21 +187,22 @@ instance (GoodMMMasterConfig config, NFDataX readDataType, NFDataX writeDataType
 
 -- | Generalized fifo for DfLike
 -- Uses blockram to store data
+-- TODO
 fifo ::
   HiddenClockResetEnable dom =>
   KnownNat depth =>
   NFDataX dat =>
-  DfLikeInput fwdA bwdA dat =>
-  DfLikeOutput fwdB bwdB dat =>
-  DfLikeInpState fwdA bwdA dat ~ sA =>
-  DfLikeOtpState fwdB bwdB dat ~ sB =>
-  Proxy (fwdA,bwdA,dat) ->
-  Proxy (fwdB,bwdB,dat) ->
+  DfLikeAlternative inpA otpA dat () =>
+  DfLikeAlternative inpB otpB () dat =>
+  DfLikeState inpA otpA dat () ~ sA =>
+  DfLikeState inpB otpB () dat ~ sB =>
+  Proxy (inpA,otpA,dat,()) ->
+  Proxy (inpB,otpB,(),dat) ->
   SNat depth ->
-  DfLikeInpParam fwdA bwdA dat ->
-  DfLikeOtpParam fwdB bwdB dat ->
-  (Signal dom fwdA, Signal dom bwdB) ->
-  (Signal dom bwdA, Signal dom fwdB)
+  DfLikeParam inpA otpA dat () ->
+  DfLikeParam inpB otpB () dat ->
+  (Signal dom inpA, Signal dom inpB) ->
+  (Signal dom otpA, Signal dom otpB)
 fifo pxyA pxyB fifoDepth paramA paramB = hideReset circuitFunction where
 
   -- implemented using a fixed-size array
@@ -286,10 +218,10 @@ fifo pxyA pxyB fifoDepth paramA paramB = hideReset circuitFunction where
     (brReadAddr, brWrite, otpA, otpB) = unbundle $ mealy machineAsFunction s0 $ bundle (brRead, unsafeToHighPolarity reset, inpA, inpB)
 
   -- when reset is on, set state to initial state and output blank outputs
-  machineAsFunction _ (_, True, _, _) = (s0, (0, Nothing, dfLikeInpBlank pxyA paramA, dfLikeOtpBlank pxyB paramB))
+  machineAsFunction _ (_, True, _, _) = (s0, (0, Nothing, dfLikeBlank pxyA paramA, dfLikeBlank pxyB paramB))
   machineAsFunction (sA,sB,rAddr,wAddr,amtLeft) (brRead, False, iA, iB) =
     let -- run the input port state machine
-        ((oA, maybePush), sA') = runState (dfLikeInpFn pxyA paramA iA (amtLeft > 0)) sA
+        ((oA, maybePush, _), sA') = runState (dfLikeFn pxyA paramA iA (amtLeft > 0) Nothing) sA
         -- potentially push an item onto blockram
         brWrite = (wAddr,) <$> maybePush
         -- adjust write address and amount left (output state machine doesn't see amountLeft')
@@ -297,7 +229,7 @@ fifo pxyA pxyB fifoDepth paramA paramB = hideReset circuitFunction where
         -- if we're about to push onto an empty queue, we can pop immediately instead
         (brRead_, amtLeft_) = if (amtLeft == maxBound && isJust maybePush) then (fromJust maybePush, amtLeft') else (brRead, amtLeft)
         -- run the output port state machine
-        ((oB, popped), sB') = runState (dfLikeOtpFn pxyB paramB iB (if (amtLeft_ < maxBound) then Just brRead_ else Nothing)) sB
+        ((oB, _, popped), sB') = runState (dfLikeFn pxyB paramB iB False (if (amtLeft_ < maxBound) then Just brRead_ else Nothing)) sB
         -- adjust blockram read address and amount left
         (rAddr', amtLeft'') = if popped then (incIdxLooping rAddr, amtLeft'+1) else (rAddr, amtLeft')
         brReadAddr = rAddr'
@@ -306,7 +238,7 @@ fifo pxyA pxyB fifoDepth paramA paramB = hideReset circuitFunction where
 
   -- initial state
   -- (s0 for input port (taken from class), s0 for output port (taken from class), next read address, next write address, space left in bram)
-  s0 = (dfLikeInpS0 pxyA paramA, dfLikeOtpS0 pxyB paramB, _0 fifoDepth, _0 fifoDepth, _maxBound fifoDepth)
+  s0 = (dfLikeS0 pxyA paramA, dfLikeS0 pxyB paramB, _0 fifoDepth, _0 fifoDepth, _maxBound fifoDepth)
 
   -- type level hack
   -- make sure we have the right Index number
