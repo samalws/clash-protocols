@@ -712,3 +712,11 @@ circuit =
 (-<) =
   error "(-<) called: did you forget to enable \"Protocols.Plugin\"?"
 
+data Reverse a
+
+instance Protocol a => Protocol (Reverse a) where
+  type Fwd (Reverse a) = Bwd a
+  type Bwd (Reverse a) = Fwd a
+
+reverseCircuit :: Circuit a b -> Circuit (Reverse b) (Reverse a)
+reverseCircuit ckt = Circuit (swap . toSignals ckt . swap)

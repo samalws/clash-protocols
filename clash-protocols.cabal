@@ -86,8 +86,6 @@ common common-options
     base >= 4.14.0.0,
     Cabal,
 
-    mtl,
-
     -- clash-prelude will set suitable version bounds for the plugins
     clash-prelude >= 1.4.0 && < 1.8,
     ghc-typelits-natnormalise,
@@ -134,6 +132,9 @@ library
     , pretty-show
     , strict-tuple
 
+    , mtl
+    , hashable
+
       -- To be removed; we need 'Test.Tasty.Hedgehog.Extra' to fix upstream issues
     , tasty >= 1.2 && < 1.5
     , tasty-hedgehog >= 1.2
@@ -148,6 +149,10 @@ library
     Protocols.Axi4.WriteAddress
     Protocols.Axi4.WriteData
     Protocols.Axi4.WriteResponse
+    Protocols.Axi4.Stream.Axi4Stream
+
+    Protocols.Avalon.Stream.AvalonStream
+    Protocols.Avalon.MemMap.AvalonMemMap
 
     Protocols.Df
     Protocols.DfLike
@@ -156,6 +161,7 @@ library
     Protocols.Hedgehog.Internal
     Protocols.Internal
     Protocols.Plugin
+    Protocols.Wishbone
 
     -- 'testProperty' is broken upstream, it reports wrong test names
     -- TODO: test / upstream ^
@@ -178,6 +184,7 @@ test-suite unittests
   other-modules:
     Tests.Protocols
     Tests.Protocols.Df
+    Tests.Protocols.DfLikeAlternative
     Tests.Protocols.Plugin
 
     Util
