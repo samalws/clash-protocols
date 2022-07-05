@@ -26,25 +26,28 @@ import           Protocols.Df (Data(..))
 import           Protocols.Internal
 
 
--- TODO comments are outdated
--- Describes how a protocol behaves at the data output end, using a state machine
+-- | Describes how a protocol behaves at one side of a circuit, using a state machine
 -- Can take parameters and provide whatever state type you would like
+-- Can be used for either the left or right side of a circuit
+-- Supports both input data and output data
 class (NFDataX (DfLikeState inp otp datInp datOtp), NFDataX datInp, NFDataX datOtp) => DfLikeAlternative inp otp datInp datOtp where
   -- | State carried between clock cycles
   type DfLikeState inp otp datInp datOtp
-  -- | User-provided parameters for the dfLike output
+  -- | User-provided parameters (e.g. address to respond to)
   type DfLikeParam inp otp datInp datOtp
   -- | Initial state, given user params
   dfLikeS0 :: Proxy (inp,otp,datInp,datOtp) -> DfLikeParam inp otp datInp datOtp -> DfLikeState inp otp datInp datOtp
   -- | Blank input, used when reset is on
   -- Doesn't look at current state, but can look at user params
-  -- Should not acknowledge any incoming datInp datOtpa
+  -- Should not acknowledge any incoming data; doing so will result in data loss
   dfLikeBlank :: Proxy (inp,otp,datInp,datOtp) -> DfLikeParam inp otp datInp datOtp -> otp
-  -- | State machine run every clock cycle at the dfLike output port
-  -- Given user-provided params; datInp datOtpa at the output port (usually an acknowledge signal); and Maybe the next datInp datOtpa item to output
-  -- Can update state using State monad
-  -- Returns datInp datOtpa to output to the port, and whether a datInp datOtpa item was taken
-  -- The 'Maybe datInp datOtp' input is allowed to change arbitrarily between clock cycles
+  -- | State machine run every clock cycle at this port.
+  -- Given user-provided params; input data at the port; acknowledge for inputted data (can be either True or False if there is no inputted data); and Maybe the next data item to output.
+  -- Can update state using State monad.
+  -- Returns data to output to the port; Maybe data inputted from the port; and whether an output data item was taken.
+  -- The 'Maybe datOtp' argument is allowed to change arbitrarily between clock cycles, as is the 'Maybe datInp' return value.
+  -- If the 'Maybe datInp' return value is 'Nothing', the 'Bool' argument can be either 'True' or 'False';
+  --   the same goes for the 'Maybe datOtp' argument and the 'Bool' return value.
   dfLikeFn :: Proxy (inp,otp,datInp,datOtp) -> DfLikeParam inp otp datInp datOtp -> inp -> Bool -> Maybe datOtp -> State (DfLikeState inp otp datInp datOtp) (otp, Maybe datInp, Bool)
 
 
@@ -153,6 +156,7 @@ instance (KnownNat errorWidth, KnownNat emptyWidth, KnownNat readyLatency, NFDat
 -- DfLike classes for AvalonMemMap
 -- TODO keep waitrequest on when not receiving data?
 
+-- TODO add in read
 instance (GoodMMSlaveConfig config, NFDataX readDataType, NFDataX writeDataType) =>
     DfLikeAlternative (AvalonSlaveIn config writeDataType) (AvalonSlaveOut config readDataType) writeDataType () where
   type DfLikeState (AvalonSlaveIn config writeDataType) (AvalonSlaveOut config readDataType) writeDataType ()
@@ -165,6 +169,7 @@ instance (GoodMMSlaveConfig config, NFDataX readDataType, NFDataX writeDataType)
   dfLikeFn _ addr si True _ | isJust (mmSlaveInToMaybe si) && si_addr si == addr = pure (boolToMMSlaveAck True, mmSlaveInToMaybe si, False)
   dfLikeFn _ _ _ _ _ = pure (boolToMMSlaveAck False, Nothing, False)
 
+-- TODO add in read
 instance (GoodMMMasterConfig config, NFDataX readDataType, NFDataX writeDataType) =>
     DfLikeAlternative (AvalonMasterIn config readDataType) (AvalonMasterOut config writeDataType) () writeDataType where
   type DfLikeState (AvalonMasterIn config readDataType) (AvalonMasterOut config writeDataType) () writeDataType
@@ -187,7 +192,6 @@ instance (GoodMMMasterConfig config, NFDataX readDataType, NFDataX writeDataType
 
 -- | Generalized fifo for DfLike
 -- Uses blockram to store data
--- TODO
 fifo ::
   HiddenClockResetEnable dom =>
   KnownNat depth =>
