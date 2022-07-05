@@ -29,8 +29,8 @@ import           Protocols.Internal
 -- | Describes how a protocol behaves at one side of a circuit, using a state machine
 -- Can take parameters and provide whatever state type you would like
 -- Can be used for either the left or right side of a circuit
--- Supports both input data and output data
-class (NFDataX (DfLikeState inp otp datInp datOtp), NFDataX datInp, NFDataX datOtp) => DfLikeAlternative inp otp datInp datOtp where
+-- Supports both input data and output data (TODO is it really DfLike then if there's data going both ways?)
+class (NFDataX (DfLikeState inp otp datInp datOtp)) => DfLikeAlternative inp otp datInp datOtp where
   -- | State carried between clock cycles
   type DfLikeState inp otp datInp datOtp
   -- | User-provided parameters (e.g. address to respond to)
@@ -190,24 +190,72 @@ instance (GoodMMMasterConfig config, NFDataX readDataType, NFDataX writeDataType
     pure retVal
 
 
+-- | Map a function over DfLike transferred data; if the function returns Nothing, we don't send it along to the right
+mapMaybe ::
+  HiddenClockResetEnable dom =>
+  DfLikeAlternative inpA otpA datA readA =>
+  DfLikeAlternative inpB otpB readB datB =>
+  Proxy (inpA,otpA,datA,readA) ->
+  Proxy (inpB,otpB,readB,datB) ->
+  DfLikeParam inpA otpA datA readA ->
+  DfLikeParam inpB otpB readB datB ->
+  (datA -> Maybe datB) ->
+  (Signal dom inpA, Signal dom inpB) ->
+  (Signal dom otpA, Signal dom otpB)
+mapMaybe pxyA pxyB paramA paramB mapFn = unbundle . mealy machineAsFunction s0 . bundle where
+  s0 = (dfLikeS0 pxyA paramA, dfLikeS0 pxyB paramB)
+  -- TODO reset
+  machineAsFunction (sA, sB) (inpA, inpB) = let
+    ((otpA, dat, _), sA') = runState (dfLikeFn pxyA paramA inpA (isJust dat && (ack || isNothing fdat)) Nothing) sA
+    ((otpB, _, ack), sB') = runState (dfLikeFn pxyB paramB inpB False fdat) sB
+    fdat = mapFn =<< dat
+    in ((sA', sB'), (otpA, otpB))
+
+-- | Map a function over DfLike transferred data
+map ::
+  HiddenClockResetEnable dom =>
+  DfLikeAlternative inpA otpA datA readA =>
+  DfLikeAlternative inpB otpB readB datB =>
+  Proxy (inpA,otpA,datA,readA) ->
+  Proxy (inpB,otpB,readB,datB) ->
+  DfLikeParam inpA otpA datA readA ->
+  DfLikeParam inpB otpB readB datB ->
+  (datA -> datB) ->
+  (Signal dom inpA, Signal dom inpB) ->
+  (Signal dom otpA, Signal dom otpB)
+map pxyA pxyB paramA paramB mapFn = mapMaybe pxyA pxyB paramA paramB (Just . mapFn)
+
+-- | Use a boolean function to filter DfLike transferred data
+filter ::
+  HiddenClockResetEnable dom =>
+  DfLikeAlternative inpA otpA dat readA =>
+  DfLikeAlternative inpB otpB readB dat =>
+  Proxy (inpA,otpA,dat,readA) ->
+  Proxy (inpB,otpB,readB,dat) ->
+  DfLikeParam inpA otpA dat readA ->
+  DfLikeParam inpB otpB readB dat ->
+  (dat -> Bool) ->
+  (Signal dom inpA, Signal dom inpB) ->
+  (Signal dom otpA, Signal dom otpB)
+filter pxyA pxyB paramA paramB filterFn = mapMaybe pxyA pxyB paramA paramB (\a -> if filterFn a then Just a else Nothing)
+
+
 -- | Generalized fifo for DfLike
 -- Uses blockram to store data
 fifo ::
   HiddenClockResetEnable dom =>
   KnownNat depth =>
   NFDataX dat =>
-  DfLikeAlternative inpA otpA dat () =>
-  DfLikeAlternative inpB otpB () dat =>
-  DfLikeState inpA otpA dat () ~ sA =>
-  DfLikeState inpB otpB () dat ~ sB =>
-  Proxy (inpA,otpA,dat,()) ->
-  Proxy (inpB,otpB,(),dat) ->
+  DfLikeAlternative inpA otpA dat readA =>
+  DfLikeAlternative inpB otpB readB dat =>
+  Proxy (inpA,otpA,dat,readA) ->
+  Proxy (inpB,otpB,readB,dat) ->
+  DfLikeParam inpA otpA dat readA ->
+  DfLikeParam inpB otpB readB dat ->
   SNat depth ->
-  DfLikeParam inpA otpA dat () ->
-  DfLikeParam inpB otpB () dat ->
   (Signal dom inpA, Signal dom inpB) ->
   (Signal dom otpA, Signal dom otpB)
-fifo pxyA pxyB fifoDepth paramA paramB = hideReset circuitFunction where
+fifo pxyA pxyB paramA paramB fifoDepth = hideReset circuitFunction where
 
   -- implemented using a fixed-size array
   --   write location and read location are both stored
