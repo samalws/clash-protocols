@@ -22,6 +22,12 @@ import           Data.Proxy (Proxy(..))
 -- me
 import           Protocols.Avalon.Stream.AvalonStream
 import           Protocols.Avalon.MemMap.AvalonMemMap
+import           Protocols.Axi4.Common (KeepBurst(..), KeepSize(..), KeepBurstLength(..), KeepResponse(..), KeepStrobe(..), Width, BurstMode(..), Resp(..))
+import           Protocols.Axi4.ReadAddress (M2S_ReadAddress(..), S2M_ReadAddress(..))
+import           Protocols.Axi4.ReadData (M2S_ReadData(..), S2M_ReadData(..))
+import           Protocols.Axi4.WriteAddress (M2S_WriteAddress(..), S2M_WriteAddress(..))
+import           Protocols.Axi4.WriteData (M2S_WriteData(..), S2M_WriteData(..))
+import           Protocols.Axi4.WriteResponse (M2S_WriteResponse(..), S2M_WriteResponse(..))
 import           Protocols.Axi4.Stream.Axi4Stream
 import           Protocols.Df (Data(..))
 import           Protocols.Internal
@@ -76,6 +82,140 @@ instance (NFDataX dat) => DfLikeAlternative Ack (Data dat) () dat where
     shouldReadAck <- gets isJust -- ack might be undefined, so we shouldn't look at it unless we have to
     when (shouldReadAck && ack) $ put Nothing
     pure retVal
+
+
+-- Fifo classes for Axi4
+
+instance (NFDataX wrUser, KnownNat wdBytes, KnownNat (Width aw), KnownNat (Width iw)) =>
+  DfLikeAlternative
+    (M2S_WriteAddress 'KeepBurst waKeepSize lw iw aw waKeepRegion waKeepBurstLength waKeepLock waKeepCache waKeepPermissions waKeepQos waUser,
+     M2S_WriteData 'KeepStrobe wdBytes wdUser,
+     M2S_WriteResponse)
+    (S2M_WriteAddress,
+     S2M_WriteData,
+     S2M_WriteResponse 'KeepResponse iw wrUser)
+    (Vec wdBytes (Maybe (BitVector 8)))
+    ()
+    where
+
+  type DfLikeState
+    (M2S_WriteAddress 'KeepBurst waKeepSize lw iw aw waKeepRegion waKeepBurstLength waKeepLock waKeepCache waKeepPermissions waKeepQos waUser,
+     M2S_WriteData 'KeepStrobe wdBytes wdUser,
+     M2S_WriteResponse)
+    (S2M_WriteAddress,
+     S2M_WriteData,
+     S2M_WriteResponse 'KeepResponse iw wrUser)
+    (Vec wdBytes (Maybe (BitVector 8)))
+    ()
+    = (Maybe (BitVector (Width iw)), S2M_WriteResponse 'KeepResponse iw wrUser)
+    -- (Just write id if we're being written to (otherwise Nothing), write response)
+
+  type DfLikeParam
+    (M2S_WriteAddress 'KeepBurst waKeepSize lw iw aw waKeepRegion waKeepBurstLength waKeepLock waKeepCache waKeepPermissions waKeepQos waUser,
+     M2S_WriteData 'KeepStrobe wdBytes wdUser,
+     M2S_WriteResponse)
+    (S2M_WriteAddress,
+     S2M_WriteData,
+     S2M_WriteResponse 'KeepResponse iw wrUser)
+    (Vec wdBytes (Maybe (BitVector 8)))
+    ()
+    = (BitVector (Width aw), wrUser)
+    -- write data address, user response for write
+
+  dfLikeS0 _ _ = (Nothing, S2M_NoWriteResponse)
+
+  dfLikeBlank _ _ = (S2M_WriteAddress{_awready = False}, S2M_WriteData{_wready = False}, S2M_NoWriteResponse)
+
+  dfLikeFn _ (dataAddr,wrUser) (wAddrVal, wDataVal, wRespAck) ack _ = do
+    wAddrAck <- processWAddr wAddrVal
+    (wDataAck, toPop) <- processWData wDataVal
+    wRespVal <- gets snd
+    processWRespAck
+    pure ((wAddrAck, wDataAck, wRespVal), toPop, False)
+    where
+
+    processWAddr M2S_NoWriteAddress = pure (S2M_WriteAddress{_awready = False})
+    processWAddr M2S_WriteAddress{ _awburst } | _awburst /= BmFixed = pure (S2M_WriteAddress{_awready = True})
+    processWAddr M2S_WriteAddress{_awaddr, _awid} = do
+      (_,b) <- get
+      put (if _awaddr == dataAddr then Just _awid else Nothing, b)
+      pure (S2M_WriteAddress{_awready = True})
+
+    processWData M2S_NoWriteData = pure (S2M_WriteData{_wready = False}, Nothing)
+    processWData M2S_WriteData{_wlast, _wdata} = do
+      (shouldRead,respS2M) <- get
+      -- we only want to output _wready = false if we're the recpient of the writes AND our buffer is full
+      -- we only want to push if we're the recpient of the writes AND our buffer has space available
+      if (isNothing shouldRead || not ack {- TODO -}) then pure (S2M_WriteData{_wready = isNothing shouldRead}, Nothing) else do
+        put (Nothing,
+             if _wlast then S2M_WriteResponse {_bid = fromJust shouldRead, _bresp = ROkay, _buser = wrUser } else respS2M)
+        pure (S2M_WriteData{_wready = True}, Just _wdata)
+
+    processWRespAck = when (_bready wRespAck) $ modify (\(a,_) -> (a,S2M_NoWriteResponse))
+
+instance (NFDataX dat, NFDataX rdUser, KnownNat (Width aw), KnownNat (Width iw)) =>
+  DfLikeAlternative
+    (M2S_ReadAddress 'KeepBurst 'NoSize lw iw aw keepRegion 'KeepBurstLength keepLock keepCache keepPermissions keepQos raData,
+     M2S_ReadData)
+    (S2M_ReadAddress,
+     S2M_ReadData 'KeepResponse iw rdUser dat)
+    ()
+    dat
+    where
+
+  type DfLikeState
+    (M2S_ReadAddress 'KeepBurst 'NoSize lw iw aw keepRegion 'KeepBurstLength keepLock keepCache keepPermissions keepQos raData,
+     M2S_ReadData)
+    (S2M_ReadAddress,
+     S2M_ReadData 'KeepResponse iw rdUser dat)
+    ()
+    dat
+    = (Index (2^8), BitVector (Width iw), S2M_ReadData 'KeepResponse iw rdUser dat)
+    -- (burst length left, read id, read data currently sending)
+
+  type DfLikeParam
+    (M2S_ReadAddress 'KeepBurst 'NoSize lw iw aw keepRegion 'KeepBurstLength keepLock keepCache keepPermissions keepQos raData,
+     M2S_ReadData)
+    (S2M_ReadAddress,
+     S2M_ReadData 'KeepResponse iw rdUser dat)
+    ()
+    dat
+    = (BitVector (Width aw), rdUser)
+    -- data address, user responses
+
+  dfLikeS0 _ _ =
+    (0,
+     errorX "DfLike for Axi4: No initial value for read id",
+     S2M_NoReadData)
+
+  dfLikeBlank _ _ = (S2M_ReadAddress { _arready = False }, S2M_NoReadData)
+
+  dfLikeFn _ (dataAddr,usr) (addrVal, dataAck) _ otpItem = do
+    addrAck <- processAddr addrVal
+    (dataVal,popped) <- sendData
+    processDataAck dataAck
+    pure ((addrAck,dataVal),Nothing,popped)
+    where
+      processAddr M2S_NoReadAddress = pure (S2M_ReadAddress { _arready = False })
+      processAddr M2S_ReadAddress{_arburst} | _arburst /= BmFixed = pure (S2M_ReadAddress{ _arready = True })
+      processAddr M2S_ReadAddress{_araddr,_arlen,_arid} = do
+        (burstLenLeft,_,c) <- get
+        when (burstLenLeft == 0 && (_araddr == dataAddr)) $ put (_arlen, _arid, c)
+        pure (S2M_ReadAddress{ _arready = burstLenLeft == 0 })
+
+      sendData = do
+        (burstLenLeft,readId,currOtp) <- get
+        popped <- case (currOtp, burstLenLeft == 0, otpItem) of
+          (S2M_NoReadData, False, Just oi) -> do
+            put (burstLenLeft-1, readId, S2M_ReadData { _rid = readId, _rdata = oi, _rresp = ROkay, _rlast = burstLenLeft == 1, _ruser = usr })
+            pure True
+          _ -> pure False
+        (_,_,currOtp') <- get
+        pure (currOtp', popped)
+
+      processDataAck M2S_ReadData{_rready} = when _rready $ do
+        (a,b,_) <- get
+        put (a,b,S2M_NoReadData)
 
 
 -- DfLike classes for Axi4Stream
