@@ -56,11 +56,11 @@ data Axi4StreamM2S idWidth destWidth userType dataType
     _tdest :: Unsigned destWidth,
     _tuser :: userType
   }
-  deriving (Generic, C.NFDataX, C.ShowX, Eq, NFData, Show)
+  deriving (Generic, C.NFDataX, C.ShowX, Eq, NFData, Show, C.Bundle)
 
 -- | Data sent from slave to master.
 -- A simple acknowledge message.
-data Axi4StreamS2M = Axi4StreamS2M { _tready :: Bool } deriving (Generic, C.NFDataX, C.ShowX, Eq, NFData, Show)
+data Axi4StreamS2M = Axi4StreamS2M { _tready :: Bool } deriving (Generic, C.NFDataX, C.ShowX, Eq, NFData, Show, C.Bundle)
 
 -- | Type for AXI4 Stream protocol.
 data Axi4Stream (dom :: Domain) (idWidth :: Nat) (destWidth :: Nat) (userType :: Type) (dataType :: Type)

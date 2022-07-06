@@ -112,7 +112,7 @@ data Data a
   = NoData
   -- | Send /a/
   | Data !a
-  deriving (Functor, Generic, C.NFDataX, C.ShowX, Eq, NFData, Show)
+  deriving (Functor, Generic, C.NFDataX, C.ShowX, Eq, NFData, Show, C.Bundle)
 
 instance Applicative Data where
   pure = Data

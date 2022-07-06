@@ -42,12 +42,12 @@ data AvalonStreamM2S channelWidth errorWidth emptyWidth dataType
     _endofpacket   :: Bool,
     _empty         :: Unsigned emptyWidth
   }
-  deriving (Generic, C.NFDataX, C.ShowX, Eq, NFData, Show)
+  deriving (Generic, C.NFDataX, C.ShowX, Eq, NFData, Show, C.Bundle)
 -- TODO options to leave stuff out
 
 -- | Data sent from slave to master.
 -- A simple acknowledge message.
-data AvalonStreamS2M (readyLatency :: Nat) = AvalonStreamS2M { _ready :: Bool } deriving (Generic, C.NFDataX, C.ShowX, Eq, NFData, Show)
+data AvalonStreamS2M (readyLatency :: Nat) = AvalonStreamS2M { _ready :: Bool } deriving (Generic, C.NFDataX, C.ShowX, Eq, NFData, Show, C.Bundle)
 
 -- | Type for Avalon Stream protocol.
 data AvalonStream (dom :: Domain) (readyLatency :: Nat) (channelWidth :: Nat) (errorWidth :: Nat) (emptyWidth :: Nat) (dataType :: Type)

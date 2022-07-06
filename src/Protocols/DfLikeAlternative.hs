@@ -10,7 +10,7 @@ Blockram is used to store fifo buffer items.
 module Protocols.DfLikeAlternative where
 
 import           Prelude hiding (replicate, last, repeat)
-import           Control.Arrow (first)
+import           Control.Arrow (first, (***))
 import           Control.Monad (when)
 import           Control.Monad.State (StateT(..), State, runState, get, put, gets, modify)
 import           Clash.Prelude hiding ((&&), (||), not)
@@ -23,13 +23,13 @@ import           Data.Proxy (Proxy(..))
 import           Protocols.Avalon.Stream.AvalonStream
 import           Protocols.Avalon.MemMap.AvalonMemMap
 import           Protocols.Axi4.Common (KeepBurst(..), KeepSize(..), KeepBurstLength(..), KeepResponse(..), KeepStrobe(..), Width, BurstMode(..), Resp(..))
-import           Protocols.Axi4.ReadAddress (M2S_ReadAddress(..), S2M_ReadAddress(..))
-import           Protocols.Axi4.ReadData (M2S_ReadData(..), S2M_ReadData(..))
-import           Protocols.Axi4.WriteAddress (M2S_WriteAddress(..), S2M_WriteAddress(..))
-import           Protocols.Axi4.WriteData (M2S_WriteData(..), S2M_WriteData(..))
-import           Protocols.Axi4.WriteResponse (M2S_WriteResponse(..), S2M_WriteResponse(..))
+import           Protocols.Axi4.ReadAddress (Axi4ReadAddress, M2S_ReadAddress(..), S2M_ReadAddress(..))
+import           Protocols.Axi4.ReadData (Axi4ReadData, M2S_ReadData(..), S2M_ReadData(..))
+import           Protocols.Axi4.WriteAddress (Axi4WriteAddress, M2S_WriteAddress(..), S2M_WriteAddress(..))
+import           Protocols.Axi4.WriteData (Axi4WriteData, M2S_WriteData(..), S2M_WriteData(..))
+import           Protocols.Axi4.WriteResponse (Axi4WriteResponse, M2S_WriteResponse(..), S2M_WriteResponse(..))
 import           Protocols.Axi4.Stream.Axi4Stream
-import           Protocols.Df (Data(..))
+import           Protocols.Df (Data(..), Df)
 import           Protocols.Internal
 
 
@@ -37,17 +37,34 @@ import           Protocols.Internal
 -- Can take parameters and provide whatever state type you would like
 -- Can be used for either the left or right side of a circuit
 -- Supports both input data and output data (TODO is it really DfLike then if there's data going both ways?)
-class (NFDataX (DfLikeState inp otp datInp datOtp)) => DfLikeAlternative inp otp datInp datOtp where
+class
+  ( Protocol df
+  , Fwd df ~ Unbundled (Dom df) (OtpData df)
+  , Bwd df ~ Unbundled (Dom df) (InpData df)
+  , NFDataX (DfLikeState df)
+  , Bundle (InpData df)
+  , Bundle (OtpData df))
+  => DfLikeAlternative df where
+  -- | TODO comment
+  type Dom df :: Domain
+  -- | TODO comment
+  type InpPayload df
+  -- | TODO comment
+  type OtpPayload df
+  -- | TODO comment
+  type OtpData df
+  -- | TODO comment
+  type InpData df
   -- | State carried between clock cycles
-  type DfLikeState inp otp datInp datOtp
+  type DfLikeState df
   -- | User-provided parameters (e.g. address to respond to)
-  type DfLikeParam inp otp datInp datOtp
+  type DfLikeParam df
   -- | Initial state, given user params
-  dfLikeS0 :: Proxy (inp,otp,datInp,datOtp) -> DfLikeParam inp otp datInp datOtp -> DfLikeState inp otp datInp datOtp
+  dfLikeS0 :: Proxy df -> DfLikeParam df -> DfLikeState df
   -- | Blank input, used when reset is on
   -- Doesn't look at current state, but can look at user params
   -- Should not acknowledge any incoming data; doing so will result in data loss
-  dfLikeBlank :: Proxy (inp,otp,datInp,datOtp) -> DfLikeParam inp otp datInp datOtp -> otp
+  dfLikeBlank :: Proxy df -> DfLikeParam df -> OtpData df
   -- | State machine run every clock cycle at this port.
   -- Given user-provided params; input data at the port; acknowledge for inputted data (can be either True or False if there is no inputted data); and Maybe the next data item to output.
   -- Can update state using State monad.
@@ -55,22 +72,32 @@ class (NFDataX (DfLikeState inp otp datInp datOtp)) => DfLikeAlternative inp otp
   -- The 'Maybe datOtp' argument is allowed to change arbitrarily between clock cycles, as is the 'Maybe datInp' return value.
   -- If the 'Maybe datInp' return value is 'Nothing', the 'Bool' argument can be either 'True' or 'False';
   --   the same goes for the 'Maybe datOtp' argument and the 'Bool' return value.
-  dfLikeFn :: Proxy (inp,otp,datInp,datOtp) -> DfLikeParam inp otp datInp datOtp -> inp -> Bool -> Maybe datOtp -> State (DfLikeState inp otp datInp datOtp) (otp, Maybe datInp, Bool)
+  dfLikeFn :: Proxy df -> DfLikeParam df -> InpData df -> Bool -> Maybe (OtpPayload df) -> State (DfLikeState df) (OtpData df, Maybe (InpPayload df), Bool)
 
 
 -- DfLike classes for Df
 
-instance (NFDataX dat) => DfLikeAlternative (Data dat) Ack dat () where
-  type DfLikeState (Data dat) Ack dat () = ()
-  type DfLikeParam (Data dat) Ack dat () = ()
+instance (NFDataX dat) => DfLikeAlternative (Reverse (Df dom dat)) where
+  type Dom         (Reverse (Df dom dat)) = dom
+  type InpData     (Reverse (Df dom dat)) = Data dat
+  type OtpData     (Reverse (Df dom dat)) = Ack
+  type InpPayload  (Reverse (Df dom dat)) = dat
+  type OtpPayload  (Reverse (Df dom dat)) = ()
+  type DfLikeState (Reverse (Df dom dat)) = ()
+  type DfLikeParam (Reverse (Df dom dat)) = ()
   dfLikeS0 _ _ = ()
   dfLikeBlank _ _ = Ack False
   dfLikeFn _ _ (Data inp) ack _ = pure (Ack ack, Just inp, False)
   dfLikeFn _ _ _ _ _ = pure (Ack False, Nothing, False)
 
-instance (NFDataX dat) => DfLikeAlternative Ack (Data dat) () dat where
-  type DfLikeState Ack (Data dat) () dat = Maybe dat
-  type DfLikeParam Ack (Data dat) () dat = ()
+instance (NFDataX dat) => DfLikeAlternative (Df dom dat) where
+  type Dom         (Df dom dat) = dom
+  type InpData     (Df dom dat) = Ack
+  type OtpData     (Df dom dat) = Data dat
+  type InpPayload  (Df dom dat) = ()
+  type OtpPayload  (Df dom dat) = dat
+  type DfLikeState (Df dom dat) = Maybe dat
+  type DfLikeParam (Df dom dat) = ()
   dfLikeS0 _ _ = Nothing
   dfLikeBlank _ _ = NoData
   dfLikeFn _ _ (Ack ack) _ otpItem = do
@@ -88,37 +115,50 @@ instance (NFDataX dat) => DfLikeAlternative Ack (Data dat) () dat where
 
 instance (NFDataX wrUser, KnownNat wdBytes, KnownNat (Width aw), KnownNat (Width iw)) =>
   DfLikeAlternative
-    (M2S_WriteAddress 'KeepBurst waKeepSize lw iw aw waKeepRegion waKeepBurstLength waKeepLock waKeepCache waKeepPermissions waKeepQos waUser,
-     M2S_WriteData 'KeepStrobe wdBytes wdUser,
-     M2S_WriteResponse)
-    (S2M_WriteAddress,
-     S2M_WriteData,
-     S2M_WriteResponse 'KeepResponse iw wrUser)
-    (Vec wdBytes (Maybe (BitVector 8)))
-    ()
+    (Reverse (Axi4WriteAddress dom 'KeepBurst waKeepSize lw iw aw waKeepRegion waKeepBurstLength waKeepLock waKeepCache waKeepPermissions waKeepQos waUser),
+     Reverse (Axi4WriteData dom 'KeepStrobe wdBytes wdUser),
+     Axi4WriteResponse dom 'KeepResponse iw wrUser)
     where
 
+  type Dom
+    (Reverse (Axi4WriteAddress dom 'KeepBurst waKeepSize lw iw aw waKeepRegion waKeepBurstLength waKeepLock waKeepCache waKeepPermissions waKeepQos waUser),
+     Reverse (Axi4WriteData dom 'KeepStrobe wdBytes wdUser),
+     Axi4WriteResponse dom 'KeepResponse iw wrUser)
+    = dom
+  type InpData
+    (Reverse (Axi4WriteAddress dom 'KeepBurst waKeepSize lw iw aw waKeepRegion waKeepBurstLength waKeepLock waKeepCache waKeepPermissions waKeepQos waUser),
+     Reverse (Axi4WriteData dom 'KeepStrobe wdBytes wdUser),
+     Axi4WriteResponse dom 'KeepResponse iw wrUser)
+    = (M2S_WriteAddress 'KeepBurst waKeepSize lw iw aw waKeepRegion waKeepBurstLength waKeepLock waKeepCache waKeepPermissions waKeepQos waUser,
+       M2S_WriteData 'KeepStrobe wdBytes wdUser,
+       M2S_WriteResponse)
+  type OtpData
+    (Reverse (Axi4WriteAddress dom 'KeepBurst waKeepSize lw iw aw waKeepRegion waKeepBurstLength waKeepLock waKeepCache waKeepPermissions waKeepQos waUser),
+     Reverse (Axi4WriteData dom 'KeepStrobe wdBytes wdUser),
+     Axi4WriteResponse dom 'KeepResponse iw wrUser)
+    =  (S2M_WriteAddress,
+        S2M_WriteData,
+        S2M_WriteResponse 'KeepResponse iw wrUser)
+  type InpPayload
+    (Reverse (Axi4WriteAddress dom 'KeepBurst waKeepSize lw iw aw waKeepRegion waKeepBurstLength waKeepLock waKeepCache waKeepPermissions waKeepQos waUser),
+     Reverse (Axi4WriteData dom 'KeepStrobe wdBytes wdUser),
+     Axi4WriteResponse dom 'KeepResponse iw wrUser)
+    = Vec wdBytes (Maybe (BitVector 8))
+  type OtpPayload
+    (Reverse (Axi4WriteAddress dom 'KeepBurst waKeepSize lw iw aw waKeepRegion waKeepBurstLength waKeepLock waKeepCache waKeepPermissions waKeepQos waUser),
+     Reverse (Axi4WriteData dom 'KeepStrobe wdBytes wdUser),
+     Axi4WriteResponse dom 'KeepResponse iw wrUser)
+    = ()
   type DfLikeState
-    (M2S_WriteAddress 'KeepBurst waKeepSize lw iw aw waKeepRegion waKeepBurstLength waKeepLock waKeepCache waKeepPermissions waKeepQos waUser,
-     M2S_WriteData 'KeepStrobe wdBytes wdUser,
-     M2S_WriteResponse)
-    (S2M_WriteAddress,
-     S2M_WriteData,
-     S2M_WriteResponse 'KeepResponse iw wrUser)
-    (Vec wdBytes (Maybe (BitVector 8)))
-    ()
+    (Reverse (Axi4WriteAddress dom 'KeepBurst waKeepSize lw iw aw waKeepRegion waKeepBurstLength waKeepLock waKeepCache waKeepPermissions waKeepQos waUser),
+     Reverse (Axi4WriteData dom 'KeepStrobe wdBytes wdUser),
+     Axi4WriteResponse dom 'KeepResponse iw wrUser)
     = (Maybe (BitVector (Width iw)), S2M_WriteResponse 'KeepResponse iw wrUser)
     -- (Just write id if we're being written to (otherwise Nothing), write response)
-
   type DfLikeParam
-    (M2S_WriteAddress 'KeepBurst waKeepSize lw iw aw waKeepRegion waKeepBurstLength waKeepLock waKeepCache waKeepPermissions waKeepQos waUser,
-     M2S_WriteData 'KeepStrobe wdBytes wdUser,
-     M2S_WriteResponse)
-    (S2M_WriteAddress,
-     S2M_WriteData,
-     S2M_WriteResponse 'KeepResponse iw wrUser)
-    (Vec wdBytes (Maybe (BitVector 8)))
-    ()
+    (Reverse (Axi4WriteAddress dom 'KeepBurst waKeepSize lw iw aw waKeepRegion waKeepBurstLength waKeepLock waKeepCache waKeepPermissions waKeepQos waUser),
+     Reverse (Axi4WriteData dom 'KeepStrobe wdBytes wdUser),
+     Axi4WriteResponse dom 'KeepResponse iw wrUser)
     = (BitVector (Width aw), wrUser)
     -- write data address, user response for write
 
@@ -155,31 +195,40 @@ instance (NFDataX wrUser, KnownNat wdBytes, KnownNat (Width aw), KnownNat (Width
 
 instance (NFDataX dat, NFDataX rdUser, KnownNat (Width aw), KnownNat (Width iw)) =>
   DfLikeAlternative
-    (M2S_ReadAddress 'KeepBurst 'NoSize lw iw aw keepRegion 'KeepBurstLength keepLock keepCache keepPermissions keepQos raData,
-     M2S_ReadData)
-    (S2M_ReadAddress,
-     S2M_ReadData 'KeepResponse iw rdUser dat)
-    ()
-    dat
+    (Reverse (Axi4ReadAddress dom 'KeepBurst 'NoSize lw iw aw keepRegion 'KeepBurstLength keepLock keepCache keepPermissions keepQos raData),
+     Axi4ReadData dom 'KeepResponse iw rdUser dat)
     where
 
+  type Dom
+    (Reverse (Axi4ReadAddress dom 'KeepBurst 'NoSize lw iw aw keepRegion 'KeepBurstLength keepLock keepCache keepPermissions keepQos raData),
+     Axi4ReadData dom 'KeepResponse iw rdUser dat)
+     = dom
+  type InpData
+    (Reverse (Axi4ReadAddress dom 'KeepBurst 'NoSize lw iw aw keepRegion 'KeepBurstLength keepLock keepCache keepPermissions keepQos raData),
+     Axi4ReadData dom 'KeepResponse iw rdUser dat)
+    = (M2S_ReadAddress 'KeepBurst 'NoSize lw iw aw keepRegion 'KeepBurstLength keepLock keepCache keepPermissions keepQos raData,
+       M2S_ReadData)
+  type OtpData
+    (Reverse (Axi4ReadAddress dom 'KeepBurst 'NoSize lw iw aw keepRegion 'KeepBurstLength keepLock keepCache keepPermissions keepQos raData),
+     Axi4ReadData dom 'KeepResponse iw rdUser dat)
+    = (S2M_ReadAddress,
+       S2M_ReadData 'KeepResponse iw rdUser dat)
+  type InpPayload
+    (Reverse (Axi4ReadAddress dom 'KeepBurst 'NoSize lw iw aw keepRegion 'KeepBurstLength keepLock keepCache keepPermissions keepQos raData),
+     Axi4ReadData dom 'KeepResponse iw rdUser dat)
+     = ()
+  type OtpPayload
+    (Reverse (Axi4ReadAddress dom 'KeepBurst 'NoSize lw iw aw keepRegion 'KeepBurstLength keepLock keepCache keepPermissions keepQos raData),
+     Axi4ReadData dom 'KeepResponse iw rdUser dat)
+     = dat
   type DfLikeState
-    (M2S_ReadAddress 'KeepBurst 'NoSize lw iw aw keepRegion 'KeepBurstLength keepLock keepCache keepPermissions keepQos raData,
-     M2S_ReadData)
-    (S2M_ReadAddress,
-     S2M_ReadData 'KeepResponse iw rdUser dat)
-    ()
-    dat
+    (Reverse (Axi4ReadAddress dom 'KeepBurst 'NoSize lw iw aw keepRegion 'KeepBurstLength keepLock keepCache keepPermissions keepQos raData),
+     Axi4ReadData dom 'KeepResponse iw rdUser dat)
     = (Index (2^8), BitVector (Width iw), S2M_ReadData 'KeepResponse iw rdUser dat)
     -- (burst length left, read id, read data currently sending)
-
   type DfLikeParam
-    (M2S_ReadAddress 'KeepBurst 'NoSize lw iw aw keepRegion 'KeepBurstLength keepLock keepCache keepPermissions keepQos raData,
-     M2S_ReadData)
-    (S2M_ReadAddress,
-     S2M_ReadData 'KeepResponse iw rdUser dat)
-    ()
-    dat
+    (Reverse (Axi4ReadAddress dom 'KeepBurst 'NoSize lw iw aw keepRegion 'KeepBurstLength keepLock keepCache keepPermissions keepQos raData),
+     Axi4ReadData dom 'KeepResponse iw rdUser dat)
     = (BitVector (Width aw), rdUser)
     -- data address, user responses
 
@@ -220,24 +269,30 @@ instance (NFDataX dat, NFDataX rdUser, KnownNat (Width aw), KnownNat (Width iw))
 
 -- DfLike classes for Axi4Stream
 
-instance (KnownNat idWidth, KnownNat destWidth, NFDataX dataType) =>
-    DfLikeAlternative (Axi4StreamM2S idWidth destWidth () dataType) Axi4StreamS2M dataType () where
-  type DfLikeState (Axi4StreamM2S idWidth destWidth () dataType) Axi4StreamS2M dataType ()
-    = ()
-  type DfLikeParam (Axi4StreamM2S idWidth destWidth () dataType) Axi4StreamS2M dataType ()
-    = ()
+instance (KnownNat idWidth, KnownNat destWidth) =>
+  DfLikeAlternative (Reverse (Axi4Stream dom idWidth destWidth () (Vec dataLen Axi4StreamByte))) where
+  type Dom          (Reverse (Axi4Stream dom idWidth destWidth () (Vec dataLen Axi4StreamByte))) = dom
+  type InpData      (Reverse (Axi4Stream dom idWidth destWidth () (Vec dataLen Axi4StreamByte))) = Axi4StreamM2S idWidth destWidth () (Vec dataLen Axi4StreamByte)
+  type OtpData      (Reverse (Axi4Stream dom idWidth destWidth () (Vec dataLen Axi4StreamByte))) = Axi4StreamS2M
+  type InpPayload   (Reverse (Axi4Stream dom idWidth destWidth () (Vec dataLen Axi4StreamByte))) = Vec dataLen Axi4StreamByte
+  type OtpPayload   (Reverse (Axi4Stream dom idWidth destWidth () (Vec dataLen Axi4StreamByte))) = ()
+  type DfLikeState  (Reverse (Axi4Stream dom idWidth destWidth () (Vec dataLen Axi4StreamByte))) = ()
+  type DfLikeParam  (Reverse (Axi4Stream dom idWidth destWidth () (Vec dataLen Axi4StreamByte))) = ()
 
   dfLikeS0 _ _ = ()
   dfLikeBlank _ _ = Axi4StreamS2M { _tready = False }
   dfLikeFn _ _ (Axi4StreamM2S { _tdata }) ack _ = pure (Axi4StreamS2M { _tready = ack }, Just _tdata, False)
   dfLikeFn _ _ _ _ _ = pure (Axi4StreamS2M { _tready = False }, Nothing, False)
 
-instance (KnownNat idWidth, KnownNat destWidth, NFDataX dataType) =>
-    DfLikeAlternative Axi4StreamS2M (Axi4StreamM2S idWidth destWidth () dataType) () dataType where
-  type DfLikeState Axi4StreamS2M (Axi4StreamM2S idWidth destWidth () dataType) () dataType
-    = Axi4StreamM2S idWidth destWidth () dataType
-  type DfLikeParam Axi4StreamS2M (Axi4StreamM2S idWidth destWidth () dataType) () dataType
-    = Unsigned destWidth
+instance (KnownNat idWidth, KnownNat destWidth, KnownNat dataLen) =>
+  DfLikeAlternative (Axi4Stream dom idWidth destWidth () (Vec dataLen Axi4StreamByte)) where
+  type Dom          (Axi4Stream dom idWidth destWidth () (Vec dataLen Axi4StreamByte)) = dom
+  type InpData      (Axi4Stream dom idWidth destWidth () (Vec dataLen Axi4StreamByte)) = Axi4StreamS2M
+  type OtpData      (Axi4Stream dom idWidth destWidth () (Vec dataLen Axi4StreamByte)) = Axi4StreamM2S idWidth destWidth () (Vec dataLen Axi4StreamByte)
+  type InpPayload   (Axi4Stream dom idWidth destWidth () (Vec dataLen Axi4StreamByte)) = ()
+  type OtpPayload   (Axi4Stream dom idWidth destWidth () (Vec dataLen Axi4StreamByte)) = (Vec dataLen Axi4StreamByte)
+  type DfLikeState  (Axi4Stream dom idWidth destWidth () (Vec dataLen Axi4StreamByte)) = Axi4StreamM2S idWidth destWidth () (Vec dataLen Axi4StreamByte)
+  type DfLikeParam  (Axi4Stream dom idWidth destWidth () (Vec dataLen Axi4StreamByte)) = Unsigned destWidth
 
   dfLikeS0 _ _ = NoAxi4StreamM2S
   dfLikeBlank _ _ = NoAxi4StreamM2S
@@ -258,11 +313,14 @@ instance (KnownNat idWidth, KnownNat destWidth, NFDataX dataType) =>
 -- TODO keep ready on when not receiving data?
 
 instance (NFDataX dataType) =>
-    DfLikeAlternative (AvalonStreamM2S channelWidth errorWidth emptyWidth dataType) (AvalonStreamS2M 0) dataType () where
-  type DfLikeState (AvalonStreamM2S channelWidth errorWidth emptyWidth dataType) (AvalonStreamS2M 0) dataType ()
-    = ()
-  type DfLikeParam (AvalonStreamM2S channelWidth errorWidth emptyWidth dataType) (AvalonStreamS2M 0) dataType ()
-    = ()
+  DfLikeAlternative (Reverse (AvalonStream dom 0 channelWidth errorWidth emptyWidth dataType)) where
+  type Dom          (Reverse (AvalonStream dom 0 channelWidth errorWidth emptyWidth dataType)) = dom
+  type InpData      (Reverse (AvalonStream dom 0 channelWidth errorWidth emptyWidth dataType)) = AvalonStreamM2S channelWidth errorWidth emptyWidth dataType
+  type OtpData      (Reverse (AvalonStream dom 0 channelWidth errorWidth emptyWidth dataType)) = AvalonStreamS2M 0
+  type InpPayload   (Reverse (AvalonStream dom 0 channelWidth errorWidth emptyWidth dataType)) = dataType
+  type OtpPayload   (Reverse (AvalonStream dom 0 channelWidth errorWidth emptyWidth dataType)) = ()
+  type DfLikeState  (Reverse (AvalonStream dom 0 channelWidth errorWidth emptyWidth dataType)) = ()
+  type DfLikeParam  (Reverse (AvalonStream dom 0 channelWidth errorWidth emptyWidth dataType)) = ()
 
   dfLikeS0 _ _ = ()
   dfLikeBlank _ _ = AvalonStreamS2M { _ready = False }
@@ -270,11 +328,14 @@ instance (NFDataX dataType) =>
   dfLikeFn _ _ _ _ _ = pure (AvalonStreamS2M { _ready = False }, Nothing, False)
 
 instance (KnownNat errorWidth, KnownNat emptyWidth, KnownNat readyLatency, NFDataX dataType) =>
-    DfLikeAlternative (AvalonStreamS2M readyLatency) (AvalonStreamM2S channelWidth errorWidth emptyWidth dataType) () dataType where
-  type DfLikeState (AvalonStreamS2M readyLatency) (AvalonStreamM2S channelWidth errorWidth emptyWidth dataType) () dataType
-    = (Vec (readyLatency+1) Bool, AvalonStreamM2S channelWidth errorWidth emptyWidth dataType)
-  type DfLikeParam (AvalonStreamS2M readyLatency) (AvalonStreamM2S channelWidth errorWidth emptyWidth dataType) () dataType
-    = (Unsigned channelWidth)
+  DfLikeAlternative (AvalonStream dom readyLatency channelWidth errorWidth emptyWidth dataType) where
+  type Dom          (AvalonStream dom readyLatency channelWidth errorWidth emptyWidth dataType) = dom
+  type InpData      (AvalonStream dom readyLatency channelWidth errorWidth emptyWidth dataType) = AvalonStreamS2M readyLatency
+  type OtpData      (AvalonStream dom readyLatency channelWidth errorWidth emptyWidth dataType) = AvalonStreamM2S channelWidth errorWidth emptyWidth dataType
+  type InpPayload   (AvalonStream dom readyLatency channelWidth errorWidth emptyWidth dataType) = ()
+  type OtpPayload   (AvalonStream dom readyLatency channelWidth errorWidth emptyWidth dataType) = dataType
+  type DfLikeState  (AvalonStream dom readyLatency channelWidth errorWidth emptyWidth dataType) = (Vec (readyLatency+1) Bool, AvalonStreamM2S channelWidth errorWidth emptyWidth dataType)
+  type DfLikeParam  (AvalonStream dom readyLatency channelWidth errorWidth emptyWidth dataType) = Unsigned channelWidth
 
   dfLikeS0 _ _ = (repeat False, NoAvalonStreamM2S)
   dfLikeBlank _ _ = NoAvalonStreamM2S
@@ -299,11 +360,14 @@ instance (KnownNat errorWidth, KnownNat emptyWidth, KnownNat readyLatency, NFDat
 
 -- TODO add in read
 instance (GoodMMSlaveConfig config, NFDataX readDataType, NFDataX writeDataType) =>
-    DfLikeAlternative (AvalonSlaveIn config writeDataType) (AvalonSlaveOut config readDataType) writeDataType () where
-  type DfLikeState (AvalonSlaveIn config writeDataType) (AvalonSlaveOut config readDataType) writeDataType ()
-    = ()
-  type DfLikeParam (AvalonSlaveIn config writeDataType) (AvalonSlaveOut config readDataType) writeDataType ()
-    = Unsigned (AddrWidth (SShared config))
+  DfLikeAlternative (Reverse (AvalonMMSlave dom 0 config readDataType writeDataType)) where
+  type Dom          (Reverse (AvalonMMSlave dom 0 config readDataType writeDataType)) = dom
+  type InpData      (Reverse (AvalonMMSlave dom 0 config readDataType writeDataType)) = AvalonSlaveIn config writeDataType
+  type OtpData      (Reverse (AvalonMMSlave dom 0 config readDataType writeDataType)) = AvalonSlaveOut config readDataType
+  type InpPayload   (Reverse (AvalonMMSlave dom 0 config readDataType writeDataType)) = writeDataType
+  type OtpPayload   (Reverse (AvalonMMSlave dom 0 config readDataType writeDataType)) = ()
+  type DfLikeState  (Reverse (AvalonMMSlave dom 0 config readDataType writeDataType)) = ()
+  type DfLikeParam  (Reverse (AvalonMMSlave dom 0 config readDataType writeDataType)) = Unsigned (AddrWidth (SShared config))
 
   dfLikeS0 _ _ = ()
   dfLikeBlank _ _ = boolToMMSlaveAck False
@@ -312,11 +376,14 @@ instance (GoodMMSlaveConfig config, NFDataX readDataType, NFDataX writeDataType)
 
 -- TODO add in read
 instance (GoodMMMasterConfig config, NFDataX readDataType, NFDataX writeDataType) =>
-    DfLikeAlternative (AvalonMasterIn config readDataType) (AvalonMasterOut config writeDataType) () writeDataType where
-  type DfLikeState (AvalonMasterIn config readDataType) (AvalonMasterOut config writeDataType) () writeDataType
-    = Maybe writeDataType
-  type DfLikeParam (AvalonMasterIn config readDataType) (AvalonMasterOut config writeDataType) () writeDataType
-    = Unsigned (AddrWidth (MShared config))
+  DfLikeAlternative (AvalonMMMaster dom config readDataType writeDataType) where
+  type Dom          (AvalonMMMaster dom config readDataType writeDataType) = dom
+  type InpData      (AvalonMMMaster dom config readDataType writeDataType) = AvalonMasterIn config readDataType
+  type OtpData      (AvalonMMMaster dom config readDataType writeDataType) = AvalonMasterOut config writeDataType
+  type InpPayload   (AvalonMMMaster dom config readDataType writeDataType) = ()
+  type OtpPayload   (AvalonMMMaster dom config readDataType writeDataType) = writeDataType
+  type DfLikeState  (AvalonMMMaster dom config readDataType writeDataType) = Maybe writeDataType
+  type DfLikeParam  (AvalonMMMaster dom config readDataType writeDataType) = Unsigned (AddrWidth (MShared config))
 
   dfLikeS0 _ _ = Nothing
   dfLikeBlank _ _ = mmMasterOutNoData
@@ -330,20 +397,19 @@ instance (GoodMMMasterConfig config, NFDataX readDataType, NFDataX writeDataType
     when (shouldReadAck && mmMasterInToBool mi) $ put Nothing
     pure retVal
 
-
 -- | Map a function over DfLike transferred data; if the function returns Nothing, we don't send it along to the right
 mapMaybe ::
-  HiddenClockResetEnable dom =>
-  DfLikeAlternative inpA otpA datA readA =>
-  DfLikeAlternative inpB otpB readB datB =>
-  Proxy (inpA,otpA,datA,readA) ->
-  Proxy (inpB,otpB,readB,datB) ->
-  DfLikeParam inpA otpA datA readA ->
-  DfLikeParam inpB otpB readB datB ->
-  (datA -> Maybe datB) ->
-  (Signal dom inpA, Signal dom inpB) ->
-  (Signal dom otpA, Signal dom otpB)
-mapMaybe pxyA pxyB paramA paramB mapFn = unbundle . hideReset circuitFunction . bundle where
+  DfLikeAlternative dfA =>
+  DfLikeAlternative dfB =>
+  Dom dfA ~ Dom dfB =>
+  HiddenClockResetEnable (Dom dfA) =>
+  Proxy dfA ->
+  Proxy dfB ->
+  DfLikeParam dfA ->
+  DfLikeParam dfB ->
+  (InpPayload dfA -> Maybe (OtpPayload dfB)) ->
+  Circuit (Reverse dfA) dfB
+mapMaybe pxyA pxyB paramA paramB mapFn = Circuit $ (unbundle *** unbundle) . unbundle . hideReset circuitFunction . bundle . (bundle *** bundle) where
   s0 = (dfLikeS0 pxyA paramA, dfLikeS0 pxyB paramB)
   circuitFunction reset inp = mux (unsafeToHighPolarity reset) (pure (dfLikeBlank pxyA paramA, dfLikeBlank pxyB paramB)) (mealy machineAsFunction s0 inp)
   machineAsFunction (sA, sB) (inpA, inpB) = let
@@ -354,48 +420,50 @@ mapMaybe pxyA pxyB paramA paramB mapFn = unbundle . hideReset circuitFunction . 
 
 -- | Map a function over DfLike transferred data
 map ::
-  HiddenClockResetEnable dom =>
-  DfLikeAlternative inpA otpA datA readA =>
-  DfLikeAlternative inpB otpB readB datB =>
-  Proxy (inpA,otpA,datA,readA) ->
-  Proxy (inpB,otpB,readB,datB) ->
-  DfLikeParam inpA otpA datA readA ->
-  DfLikeParam inpB otpB readB datB ->
-  (datA -> datB) ->
-  (Signal dom inpA, Signal dom inpB) ->
-  (Signal dom otpA, Signal dom otpB)
+  DfLikeAlternative dfA =>
+  DfLikeAlternative dfB =>
+  Dom dfA ~ Dom dfB =>
+  HiddenClockResetEnable (Dom dfA) =>
+  Proxy dfA ->
+  Proxy dfB ->
+  DfLikeParam dfA ->
+  DfLikeParam dfB ->
+  (InpPayload dfA -> OtpPayload dfB) ->
+  Circuit (Reverse dfA) dfB
 map pxyA pxyB paramA paramB mapFn = mapMaybe pxyA pxyB paramA paramB (Just . mapFn)
 
 -- | Use a boolean function to filter DfLike transferred data
 filter ::
-  HiddenClockResetEnable dom =>
-  DfLikeAlternative inpA otpA dat readA =>
-  DfLikeAlternative inpB otpB readB dat =>
-  Proxy (inpA,otpA,dat,readA) ->
-  Proxy (inpB,otpB,readB,dat) ->
-  DfLikeParam inpA otpA dat readA ->
-  DfLikeParam inpB otpB readB dat ->
-  (dat -> Bool) ->
-  (Signal dom inpA, Signal dom inpB) ->
-  (Signal dom otpA, Signal dom otpB)
+  DfLikeAlternative dfA =>
+  DfLikeAlternative dfB =>
+  Dom dfA ~ Dom dfB =>
+  HiddenClockResetEnable (Dom dfA) =>
+  InpPayload dfA ~ OtpPayload dfB =>
+  Proxy dfA ->
+  Proxy dfB ->
+  DfLikeParam dfA ->
+  DfLikeParam dfB ->
+  (InpPayload dfA -> Bool) ->
+  Circuit (Reverse dfA) dfB
 filter pxyA pxyB paramA paramB filterFn = mapMaybe pxyA pxyB paramA paramB (\a -> if filterFn a then Just a else Nothing)
 
 -- | Like 'Prelude.zipWith'. User-provided function combines input data from two sources
 zipWith ::
-  HiddenClockResetEnable dom =>
-  DfLikeAlternative inpA otpA datA readA =>
-  DfLikeAlternative inpB otpB datB readB =>
-  DfLikeAlternative inpC otpC readC datC =>
-  Proxy (inpA,otpA,datA,readA) ->
-  Proxy (inpB,otpB,datB,readB) ->
-  Proxy (inpC,otpC,readC,datC) ->
-  DfLikeParam inpA otpA datA readA ->
-  DfLikeParam inpB otpB datB readB ->
-  DfLikeParam inpC otpC readC datC ->
-  (datA -> datB -> datC) ->
-  ((Signal dom inpA, Signal dom inpB), Signal dom inpC) ->
-  ((Signal dom otpA, Signal dom otpB), Signal dom otpC)
-zipWith pxyA pxyB pxyC paramA paramB paramC mapFn = first unbundle . unbundle . hideReset circuitFunction . bundle . first bundle where
+  DfLikeAlternative dfA =>
+  DfLikeAlternative dfB =>
+  DfLikeAlternative dfC =>
+  Dom dfA ~ Dom dfB =>
+  Dom dfA ~ Dom dfC =>
+  HiddenClockResetEnable (Dom dfA) =>
+  Proxy dfA ->
+  Proxy dfB ->
+  Proxy dfC ->
+  DfLikeParam dfA ->
+  DfLikeParam dfB ->
+  DfLikeParam dfC ->
+  (InpPayload dfA -> InpPayload dfB -> OtpPayload dfC) ->
+  Circuit (Reverse dfA, Reverse dfB) dfC
+zipWith pxyA pxyB pxyC paramA paramB paramC mapFn = Circuit $ ((unbundle *** unbundle) *** unbundle) . first unbundle . unbundle . hideReset circuitFunction . bundle . first bundle . ((bundle *** bundle) *** bundle) where
   s0 = (dfLikeS0 pxyA paramA, dfLikeS0 pxyB paramB, dfLikeS0 pxyC paramC)
   circuitFunction reset inp = mux (unsafeToHighPolarity reset) (pure ((dfLikeBlank pxyA paramA, dfLikeBlank pxyB paramB), dfLikeBlank pxyC paramC)) (mealy machineAsFunction s0 inp)
   machineAsFunction (sA, sB, sC) ((inpA, inpB), inpC) = let
@@ -409,19 +477,20 @@ zipWith pxyA pxyB pxyC paramA paramB paramC mapFn = first unbundle . unbundle . 
 -- | Generalized fifo for DfLike
 -- Uses blockram to store data
 fifo ::
-  HiddenClockResetEnable dom =>
+  DfLikeAlternative dfA =>
+  DfLikeAlternative dfB =>
+  Dom dfA ~ Dom dfB =>
+  HiddenClockResetEnable (Dom dfA) =>
   KnownNat depth =>
-  NFDataX dat =>
-  DfLikeAlternative inpA otpA dat readA =>
-  DfLikeAlternative inpB otpB readB dat =>
-  Proxy (inpA,otpA,dat,readA) ->
-  Proxy (inpB,otpB,readB,dat) ->
-  DfLikeParam inpA otpA dat readA ->
-  DfLikeParam inpB otpB readB dat ->
+  InpPayload dfA ~ OtpPayload dfB =>
+  NFDataX (InpPayload dfA) =>
+  Proxy dfA ->
+  Proxy dfB ->
+  DfLikeParam dfA ->
+  DfLikeParam dfB ->
   SNat depth ->
-  (Signal dom inpA, Signal dom inpB) ->
-  (Signal dom otpA, Signal dom otpB)
-fifo pxyA pxyB paramA paramB fifoDepth = hideReset circuitFunction where
+  Circuit (Reverse dfA) dfB
+fifo pxyA pxyB paramA paramB fifoDepth = Circuit ((unbundle *** unbundle) . hideReset circuitFunction . (bundle *** bundle)) where
 
   -- implemented using a fixed-size array
   --   write location and read location are both stored

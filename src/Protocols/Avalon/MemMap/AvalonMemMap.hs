@@ -276,7 +276,7 @@ data AvalonMasterOut config writeDataType
   , mo_flush       :: KeepBool (KeepFlush                config)
   , mo_writeData   :: writeDataType
   }
-  deriving Generic
+  deriving (Generic, Bundle)
 
 deriving instance (GoodMMMasterConfig config,
                    NFDataX writeDataType)
@@ -308,7 +308,7 @@ data AvalonMasterIn config readDataType
   , mi_irqNumber     :: Unsigned (IrqNumberWidth             config)
   , mi_readData      :: readDataType
   }
-  deriving Generic
+  deriving (Generic, Bundle)
 
 deriving instance (GoodMMMasterConfig config,
                    NFDataX readDataType)
@@ -339,7 +339,7 @@ data AvalonSlaveOut config readDataType
   , so_dataAvailable :: KeepBool (KeepDataAvailable          config)
   , so_readData      :: readDataType
   }
-  deriving Generic
+  deriving (Generic, Bundle)
 
 deriving instance (GoodMMSlaveConfig config,
                    NFDataX readDataType)
@@ -373,7 +373,7 @@ data AvalonSlaveIn config writeDataType
   , si_beginBurstTransfer :: KeepBool (KeepBeginBurstTransfer          config)
   , si_writeData          :: writeDataType
   }
-  deriving Generic
+  deriving (Generic, Bundle)
 
 deriving instance (GoodMMSlaveConfig config,
                    NFDataX writeDataType)

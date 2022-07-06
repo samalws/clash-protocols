@@ -143,7 +143,7 @@ newtype Circuit a b =
 
 -- | Protocol-agnostic acknowledgement
 newtype Ack = Ack Bool
-  deriving (Generic, C.NFDataX, Show)
+  deriving (Generic, C.NFDataX, Show, C.Bundle)
 
 -- | Acknowledge. Used in circuit-notation plugin to drive ignore components.
 instance Default Ack where
@@ -720,3 +720,9 @@ instance Protocol a => Protocol (Reverse a) where
 
 reverseCircuit :: Circuit a b -> Circuit (Reverse b) (Reverse a)
 reverseCircuit ckt = Circuit (swap . toSignals ckt . swap)
+
+undoDoubleReverseInp :: Circuit (Reverse (Reverse a)) b -> Circuit a b
+undoDoubleReverseInp (Circuit f) = Circuit f
+
+undoDoubleReverseOtp :: Circuit a (Reverse (Reverse b)) -> Circuit a b
+undoDoubleReverseOtp (Circuit f) = Circuit f
