@@ -201,6 +201,21 @@ prop_df_mapmaybe_inc_over_5 = DfTest.idWithModelDf' (map (+ 1) . filter (> 5)) (
   ckt :: (C.HiddenClockResetEnable dom) => Circuit (Df dom Int) (Df dom Int)
   ckt = Circuit (DfLikeAlt.mapMaybe (Proxy @(_,_,Int,())) (Proxy @(_,_,(),_)) () () (\n -> if n > 5 then Just (n+1) else Nothing))
 
+prop_df_zipwith_add :: Property
+prop_df_zipwith_add =
+  idWithModel
+    defExpectOptions
+    ( do
+        as <- DfTest.genData DfTest.genSmallInt
+        bs <- DfTest.genData DfTest.genSmallInt
+        let n = min (length as) (length bs)
+        pure (take n as, take n bs) )
+    (uncurry (zipWith (+)))
+    (C.withClockResetEnable @C.System C.clockGen C.resetGen C.enableGen ckt)
+  where
+  ckt :: (C.HiddenClockResetEnable dom) => Circuit (Df dom Int, Df dom Int) (Df dom Int)
+  ckt = Circuit $ DfLikeAlt.zipWith (Proxy @(_,_,Int,())) (Proxy @(_,_,Int,())) (Proxy @(_,_,(),_)) () () () (+)
+
 
 tests :: TestTree
 tests =

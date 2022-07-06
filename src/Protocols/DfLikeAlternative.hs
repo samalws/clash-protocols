@@ -10,6 +10,7 @@ Blockram is used to store fifo buffer items.
 module Protocols.DfLikeAlternative where
 
 import           Prelude hiding (replicate, last, repeat)
+import           Control.Arrow (first)
 import           Control.Monad (when)
 import           Control.Monad.State (StateT(..), State, runState, get, put, gets, modify)
 import           Clash.Prelude hiding ((&&), (||), not)
@@ -238,6 +239,31 @@ filter ::
   (Signal dom inpA, Signal dom inpB) ->
   (Signal dom otpA, Signal dom otpB)
 filter pxyA pxyB paramA paramB filterFn = mapMaybe pxyA pxyB paramA paramB (\a -> if filterFn a then Just a else Nothing)
+
+-- | Like 'Prelude.zipWith'. User-provided function combines input data from two sources
+zipWith ::
+  HiddenClockResetEnable dom =>
+  DfLikeAlternative inpA otpA datA readA =>
+  DfLikeAlternative inpB otpB datB readB =>
+  DfLikeAlternative inpC otpC readC datC =>
+  Proxy (inpA,otpA,datA,readA) ->
+  Proxy (inpB,otpB,datB,readB) ->
+  Proxy (inpC,otpC,readC,datC) ->
+  DfLikeParam inpA otpA datA readA ->
+  DfLikeParam inpB otpB datB readB ->
+  DfLikeParam inpC otpC readC datC ->
+  (datA -> datB -> datC) ->
+  ((Signal dom inpA, Signal dom inpB), Signal dom inpC) ->
+  ((Signal dom otpA, Signal dom otpB), Signal dom otpC)
+zipWith pxyA pxyB pxyC paramA paramB paramC mapFn = first unbundle . unbundle . hideReset circuitFunction . bundle . first bundle where
+  s0 = (dfLikeS0 pxyA paramA, dfLikeS0 pxyB paramB, dfLikeS0 pxyC paramC)
+  circuitFunction reset inp = mux (unsafeToHighPolarity reset) (pure ((dfLikeBlank pxyA paramA, dfLikeBlank pxyB paramB), dfLikeBlank pxyC paramC)) (mealy machineAsFunction s0 inp)
+  machineAsFunction (sA, sB, sC) ((inpA, inpB), inpC) = let
+    ((otpA, datA, _), sA') = runState (dfLikeFn pxyA paramA inpA (isJust fdat && ack) Nothing) sA
+    ((otpB, datB, _), sB') = runState (dfLikeFn pxyB paramB inpB (isJust fdat && ack) Nothing) sB
+    ((otpC, _, ack), sC') = runState (dfLikeFn pxyC paramC inpC False fdat) sC
+    fdat = mapFn <$> datA <*> datB
+    in ((sA', sB', sC'), ((otpA, otpB), otpC))
 
 
 -- | Generalized fifo for DfLike
