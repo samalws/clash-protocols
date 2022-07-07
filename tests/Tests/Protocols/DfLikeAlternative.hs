@@ -218,6 +218,42 @@ prop_df_zipwith_add =
   ckt :: (C.HiddenClockResetEnable dom) => Circuit (Df dom Int, Df dom Int) (Df dom Int)
   ckt = let Circuit f = ckt_ in Circuit f
 
+prop_fanout1 :: Property
+prop_fanout1 =
+  idWithModelSingleDomain
+    @C.System
+    defExpectOptions
+    (DfTest.genData DfTest.genSmallInt)
+    (C.exposeClockResetEnable C.repeat)
+    (C.exposeClockResetEnable ckt)
+  where
+  ckt :: (C.HiddenClockResetEnable dom) => Circuit (Df dom Int) (C.Vec 1 (Df dom Int))
+  ckt = undoDoubleReverseInp $ DfLikeAlt.fanout Proxy Proxy () (C.repeat ())
+
+prop_fanout2 :: Property
+prop_fanout2 =
+  idWithModelSingleDomain
+    @C.System
+    defExpectOptions
+    (DfTest.genData DfTest.genSmallInt)
+    (C.exposeClockResetEnable C.repeat)
+    (C.exposeClockResetEnable ckt)
+  where
+  ckt :: (C.HiddenClockResetEnable dom) => Circuit (Df dom Int) (C.Vec 2 (Df dom Int))
+  ckt = undoDoubleReverseInp $ DfLikeAlt.fanout Proxy Proxy () (C.repeat ())
+
+prop_fanout7 :: Property
+prop_fanout7 =
+  idWithModelSingleDomain
+    @C.System
+    defExpectOptions
+    (DfTest.genData DfTest.genSmallInt)
+    (C.exposeClockResetEnable C.repeat)
+    (C.exposeClockResetEnable ckt)
+  where
+  ckt :: (C.HiddenClockResetEnable dom) => Circuit (Df dom Int) (C.Vec 7 (Df dom Int))
+  ckt = undoDoubleReverseInp $ DfLikeAlt.fanout Proxy Proxy () (C.repeat ())
+
 
 tests :: TestTree
 tests =

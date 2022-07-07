@@ -9,8 +9,8 @@ Blockram is used to store fifo buffer items.
 
 module Protocols.DfLikeAlternative where
 
-import           Prelude hiding (replicate, last, repeat)
-import           Control.Arrow (first, (***))
+import           Prelude hiding (replicate, last, repeat, unzip)
+import           Control.Arrow (first, second, (***))
 import           Control.Monad (when)
 import           Control.Monad.State (StateT(..), State, runState, get, put, gets, modify)
 import           Clash.Prelude hiding ((&&), (||), not)
@@ -40,18 +40,18 @@ import           Protocols.Internal
 -- Supports both input data and output data (TODO is it really "Df Like" then if there's data going both ways?)
 class
   ( Protocol df
-  , Fwd df ~ Unbundled (Dom df) (OtpData df)
-  , Bwd df ~ Unbundled (Dom df) (InpData df)
+  , Fwd df ~ Unbundled (Dom df) (OtpMsg  df)
+  , Bwd df ~ Unbundled (Dom df) (InpMsg  df)
   , NFDataX (DfLikeState df)
-  , Bundle (InpData df)
-  , Bundle (OtpData df))
+  , Bundle (InpMsg  df)
+  , Bundle (OtpMsg  df))
   => DfLikeAlternative df where
   -- | Domain that messages are being sent over
   type Dom df :: Domain
   -- | Messages being sent in to this df port
-  type InpData df
+  type InpMsg  df
   -- | Messages being sent out of this df port
-  type OtpData df
+  type OtpMsg  df
   -- | Information being sent in to this df port
   type InpPayload df
   -- | Information being sent out of this df port
@@ -65,23 +65,23 @@ class
   -- | Blank input, used when reset is on.
   -- Doesn't look at current state, but can look at user params.
   -- Should not acknowledge any incoming data; doing so will result in data loss
-  dfLikeBlank :: Proxy df -> DfLikeParam df -> OtpData df
+  dfLikeBlank :: Proxy df -> DfLikeParam df -> OtpMsg  df
   -- | State machine run every clock cycle at this port.
-  -- Given user-provided params; input data at the port; acknowledge for inputted data (can be either True or False if there is no inputted data); and Maybe the next data item to output.
+  -- Given user-provided params; input message at the port; acknowledge for inp payload; and Maybe the next write payload to output.
   -- Can update state using State monad.
-  -- Returns data to output to the port; Maybe data inputted from the port; and whether an output data item was taken.
+  -- Returns message to output to the port; Maybe payload inputted from the port; and whether an output payload item was taken.
   -- The 'Maybe OtpPayload' argument is allowed to change arbitrarily between clock cycles, as is the 'Maybe InpPayload' return value.
   -- If the 'Maybe InpPayload' return value is 'Nothing', the 'Bool' argument must be 'True';
   --   the same goes for the 'Maybe OtpPayload' argument and the 'Bool' return value.
-  dfLikeFn :: Proxy df -> DfLikeParam df -> InpData df -> Bool -> Maybe (OtpPayload df) -> State (DfLikeState df) (OtpData df, Maybe (InpPayload df), Bool)
+  dfLikeFn :: Proxy df -> DfLikeParam df -> InpMsg  df -> Bool -> Maybe (OtpPayload df) -> State (DfLikeState df) (OtpMsg  df, Maybe (InpPayload df), Bool)
 
 
 -- DfLike classes for Df
 
 instance (NFDataX dat) => DfLikeAlternative (Reverse (Df dom dat)) where
   type Dom         (Reverse (Df dom dat)) = dom
-  type InpData     (Reverse (Df dom dat)) = Data dat
-  type OtpData     (Reverse (Df dom dat)) = Ack
+  type InpMsg      (Reverse (Df dom dat)) = Data dat
+  type OtpMsg      (Reverse (Df dom dat)) = Ack
   type InpPayload  (Reverse (Df dom dat)) = dat
   type OtpPayload  (Reverse (Df dom dat)) = ()
   type DfLikeState (Reverse (Df dom dat)) = ()
@@ -93,8 +93,8 @@ instance (NFDataX dat) => DfLikeAlternative (Reverse (Df dom dat)) where
 
 instance (NFDataX dat) => DfLikeAlternative (Df dom dat) where
   type Dom         (Df dom dat) = dom
-  type InpData     (Df dom dat) = Ack
-  type OtpData     (Df dom dat) = Data dat
+  type InpMsg      (Df dom dat) = Ack
+  type OtpMsg      (Df dom dat) = Data dat
   type InpPayload  (Df dom dat) = ()
   type OtpPayload  (Df dom dat) = dat
   type DfLikeState (Df dom dat) = Maybe dat
@@ -126,14 +126,14 @@ instance (NFDataX wrUser, KnownNat wdBytes, KnownNat (Width aw), KnownNat (Width
      Reverse (Axi4WriteData dom 'KeepStrobe wdBytes wdUser),
      Axi4WriteResponse dom 'KeepResponse iw wrUser)
     = dom
-  type InpData
+  type InpMsg
     (Reverse (Axi4WriteAddress dom 'KeepBurst waKeepSize lw iw aw waKeepRegion waKeepBurstLength waKeepLock waKeepCache waKeepPermissions waKeepQos waUser),
      Reverse (Axi4WriteData dom 'KeepStrobe wdBytes wdUser),
      Axi4WriteResponse dom 'KeepResponse iw wrUser)
     = (M2S_WriteAddress 'KeepBurst waKeepSize lw iw aw waKeepRegion waKeepBurstLength waKeepLock waKeepCache waKeepPermissions waKeepQos waUser,
        M2S_WriteData 'KeepStrobe wdBytes wdUser,
        M2S_WriteResponse)
-  type OtpData
+  type OtpMsg
     (Reverse (Axi4WriteAddress dom 'KeepBurst waKeepSize lw iw aw waKeepRegion waKeepBurstLength waKeepLock waKeepCache waKeepPermissions waKeepQos waUser),
      Reverse (Axi4WriteData dom 'KeepStrobe wdBytes wdUser),
      Axi4WriteResponse dom 'KeepResponse iw wrUser)
@@ -190,7 +190,7 @@ instance (NFDataX wrUser, KnownNat wdBytes, KnownNat (Width aw), KnownNat (Width
       -- we only want to output on writeresponse if we're the recipient of the writes AND ack is true
       case (shouldRead, ack) of
         (Nothing, _) -> pure (S2M_WriteData{_wready = True}, Nothing)
-        (Just sr, False) -> pure (S2M_WriteData{_wready = False}, Just _wdata)
+        (Just _, False) -> pure (S2M_WriteData{_wready = False}, Just _wdata)
         (Just sr, True) -> do
           put (Nothing,
                if _wlast then S2M_WriteResponse {_bid = sr, _bresp = ROkay, _buser = wrUser } else respS2M)
@@ -208,12 +208,12 @@ instance (NFDataX dat, NFDataX rdUser, KnownNat (Width aw), KnownNat (Width iw))
     (Reverse (Axi4ReadAddress dom 'KeepBurst 'NoSize lw iw aw keepRegion 'KeepBurstLength keepLock keepCache keepPermissions keepQos raData),
      Axi4ReadData dom 'KeepResponse iw rdUser dat)
      = dom
-  type InpData
+  type InpMsg
     (Reverse (Axi4ReadAddress dom 'KeepBurst 'NoSize lw iw aw keepRegion 'KeepBurstLength keepLock keepCache keepPermissions keepQos raData),
      Axi4ReadData dom 'KeepResponse iw rdUser dat)
     = (M2S_ReadAddress 'KeepBurst 'NoSize lw iw aw keepRegion 'KeepBurstLength keepLock keepCache keepPermissions keepQos raData,
        M2S_ReadData)
-  type OtpData
+  type OtpMsg
     (Reverse (Axi4ReadAddress dom 'KeepBurst 'NoSize lw iw aw keepRegion 'KeepBurstLength keepLock keepCache keepPermissions keepQos raData),
      Axi4ReadData dom 'KeepResponse iw rdUser dat)
     = (S2M_ReadAddress,
@@ -277,8 +277,8 @@ instance (NFDataX dat, NFDataX rdUser, KnownNat (Width aw), KnownNat (Width iw))
 instance (KnownNat idWidth, KnownNat destWidth) =>
   DfLikeAlternative (Reverse (Axi4Stream dom idWidth destWidth () (Vec dataLen Axi4StreamByte))) where
   type Dom          (Reverse (Axi4Stream dom idWidth destWidth () (Vec dataLen Axi4StreamByte))) = dom
-  type InpData      (Reverse (Axi4Stream dom idWidth destWidth () (Vec dataLen Axi4StreamByte))) = Axi4StreamM2S idWidth destWidth () (Vec dataLen Axi4StreamByte)
-  type OtpData      (Reverse (Axi4Stream dom idWidth destWidth () (Vec dataLen Axi4StreamByte))) = Axi4StreamS2M
+  type InpMsg       (Reverse (Axi4Stream dom idWidth destWidth () (Vec dataLen Axi4StreamByte))) = Axi4StreamM2S idWidth destWidth () (Vec dataLen Axi4StreamByte)
+  type OtpMsg       (Reverse (Axi4Stream dom idWidth destWidth () (Vec dataLen Axi4StreamByte))) = Axi4StreamS2M
   type InpPayload   (Reverse (Axi4Stream dom idWidth destWidth () (Vec dataLen Axi4StreamByte))) = Vec dataLen Axi4StreamByte
   type OtpPayload   (Reverse (Axi4Stream dom idWidth destWidth () (Vec dataLen Axi4StreamByte))) = ()
   type DfLikeState  (Reverse (Axi4Stream dom idWidth destWidth () (Vec dataLen Axi4StreamByte))) = ()
@@ -292,8 +292,8 @@ instance (KnownNat idWidth, KnownNat destWidth) =>
 instance (KnownNat idWidth, KnownNat destWidth, KnownNat dataLen) =>
   DfLikeAlternative (Axi4Stream dom idWidth destWidth () (Vec dataLen Axi4StreamByte)) where
   type Dom          (Axi4Stream dom idWidth destWidth () (Vec dataLen Axi4StreamByte)) = dom
-  type InpData      (Axi4Stream dom idWidth destWidth () (Vec dataLen Axi4StreamByte)) = Axi4StreamS2M
-  type OtpData      (Axi4Stream dom idWidth destWidth () (Vec dataLen Axi4StreamByte)) = Axi4StreamM2S idWidth destWidth () (Vec dataLen Axi4StreamByte)
+  type InpMsg       (Axi4Stream dom idWidth destWidth () (Vec dataLen Axi4StreamByte)) = Axi4StreamS2M
+  type OtpMsg       (Axi4Stream dom idWidth destWidth () (Vec dataLen Axi4StreamByte)) = Axi4StreamM2S idWidth destWidth () (Vec dataLen Axi4StreamByte)
   type InpPayload   (Axi4Stream dom idWidth destWidth () (Vec dataLen Axi4StreamByte)) = ()
   type OtpPayload   (Axi4Stream dom idWidth destWidth () (Vec dataLen Axi4StreamByte)) = (Vec dataLen Axi4StreamByte)
   type DfLikeState  (Axi4Stream dom idWidth destWidth () (Vec dataLen Axi4StreamByte)) = Axi4StreamM2S idWidth destWidth () (Vec dataLen Axi4StreamByte)
@@ -320,8 +320,8 @@ instance (KnownNat idWidth, KnownNat destWidth, KnownNat dataLen) =>
 instance (NFDataX dataType) =>
   DfLikeAlternative (Reverse (AvalonStream dom 0 channelWidth errorWidth emptyWidth dataType)) where
   type Dom          (Reverse (AvalonStream dom 0 channelWidth errorWidth emptyWidth dataType)) = dom
-  type InpData      (Reverse (AvalonStream dom 0 channelWidth errorWidth emptyWidth dataType)) = AvalonStreamM2S channelWidth errorWidth emptyWidth dataType
-  type OtpData      (Reverse (AvalonStream dom 0 channelWidth errorWidth emptyWidth dataType)) = AvalonStreamS2M 0
+  type InpMsg       (Reverse (AvalonStream dom 0 channelWidth errorWidth emptyWidth dataType)) = AvalonStreamM2S channelWidth errorWidth emptyWidth dataType
+  type OtpMsg       (Reverse (AvalonStream dom 0 channelWidth errorWidth emptyWidth dataType)) = AvalonStreamS2M 0
   type InpPayload   (Reverse (AvalonStream dom 0 channelWidth errorWidth emptyWidth dataType)) = dataType
   type OtpPayload   (Reverse (AvalonStream dom 0 channelWidth errorWidth emptyWidth dataType)) = ()
   type DfLikeState  (Reverse (AvalonStream dom 0 channelWidth errorWidth emptyWidth dataType)) = ()
@@ -335,8 +335,8 @@ instance (NFDataX dataType) =>
 instance (KnownNat errorWidth, KnownNat emptyWidth, KnownNat readyLatency, NFDataX dataType) =>
   DfLikeAlternative (AvalonStream dom readyLatency channelWidth errorWidth emptyWidth dataType) where
   type Dom          (AvalonStream dom readyLatency channelWidth errorWidth emptyWidth dataType) = dom
-  type InpData      (AvalonStream dom readyLatency channelWidth errorWidth emptyWidth dataType) = AvalonStreamS2M readyLatency
-  type OtpData      (AvalonStream dom readyLatency channelWidth errorWidth emptyWidth dataType) = AvalonStreamM2S channelWidth errorWidth emptyWidth dataType
+  type InpMsg       (AvalonStream dom readyLatency channelWidth errorWidth emptyWidth dataType) = AvalonStreamS2M readyLatency
+  type OtpMsg       (AvalonStream dom readyLatency channelWidth errorWidth emptyWidth dataType) = AvalonStreamM2S channelWidth errorWidth emptyWidth dataType
   type InpPayload   (AvalonStream dom readyLatency channelWidth errorWidth emptyWidth dataType) = ()
   type OtpPayload   (AvalonStream dom readyLatency channelWidth errorWidth emptyWidth dataType) = dataType
   type DfLikeState  (AvalonStream dom readyLatency channelWidth errorWidth emptyWidth dataType) = (Vec (readyLatency+1) Bool, AvalonStreamM2S channelWidth errorWidth emptyWidth dataType)
@@ -367,8 +367,8 @@ instance (KnownNat errorWidth, KnownNat emptyWidth, KnownNat readyLatency, NFDat
 instance (GoodMMSlaveConfig config, NFDataX readDataType, NFDataX writeDataType) =>
   DfLikeAlternative (Reverse (AvalonMMSlave dom 0 config readDataType writeDataType)) where
   type Dom          (Reverse (AvalonMMSlave dom 0 config readDataType writeDataType)) = dom
-  type InpData      (Reverse (AvalonMMSlave dom 0 config readDataType writeDataType)) = AvalonSlaveIn config writeDataType
-  type OtpData      (Reverse (AvalonMMSlave dom 0 config readDataType writeDataType)) = AvalonSlaveOut config readDataType
+  type InpMsg       (Reverse (AvalonMMSlave dom 0 config readDataType writeDataType)) = AvalonSlaveIn config writeDataType
+  type OtpMsg       (Reverse (AvalonMMSlave dom 0 config readDataType writeDataType)) = AvalonSlaveOut config readDataType
   type InpPayload   (Reverse (AvalonMMSlave dom 0 config readDataType writeDataType)) = writeDataType
   type OtpPayload   (Reverse (AvalonMMSlave dom 0 config readDataType writeDataType)) = ()
   type DfLikeState  (Reverse (AvalonMMSlave dom 0 config readDataType writeDataType)) = ()
@@ -383,8 +383,8 @@ instance (GoodMMSlaveConfig config, NFDataX readDataType, NFDataX writeDataType)
 instance (GoodMMMasterConfig config, NFDataX readDataType, NFDataX writeDataType) =>
   DfLikeAlternative (AvalonMMMaster dom config readDataType writeDataType) where
   type Dom          (AvalonMMMaster dom config readDataType writeDataType) = dom
-  type InpData      (AvalonMMMaster dom config readDataType writeDataType) = AvalonMasterIn config readDataType
-  type OtpData      (AvalonMMMaster dom config readDataType writeDataType) = AvalonMasterOut config writeDataType
+  type InpMsg       (AvalonMMMaster dom config readDataType writeDataType) = AvalonMasterIn config readDataType
+  type OtpMsg       (AvalonMMMaster dom config readDataType writeDataType) = AvalonMasterOut config writeDataType
   type InpPayload   (AvalonMMMaster dom config readDataType writeDataType) = ()
   type OtpPayload   (AvalonMMMaster dom config readDataType writeDataType) = writeDataType
   type DfLikeState  (AvalonMMMaster dom config readDataType writeDataType) = Maybe writeDataType
@@ -478,6 +478,34 @@ zipWith pxyA pxyB pxyC paramA paramB paramC mapFn = Circuit $ ((unbundle *** unb
     fdat = mapFn <$> datA <*> datB
     in ((sA', sB', sC'), ((otpA, otpB), otpC))
 
+-- | Copy data of a single DfLike stream to multiple
+fanout ::
+  DfLikeAlternative dfA =>
+  DfLikeAlternative dfB =>
+  Dom dfA ~ Dom dfB =>
+  HiddenClockResetEnable (Dom dfA) =>
+  InpPayload dfA ~ OtpPayload dfB =>
+  NFDataX (InpPayload dfA) =>
+  KnownNat numB =>
+  Proxy dfA ->
+  Proxy dfB ->
+  DfLikeParam dfA ->
+  Vec numB (DfLikeParam dfB) ->
+  Circuit (Reverse dfA) (Vec numB dfB)
+fanout pxyA pxyB paramA paramsB = Circuit $ (unbundle *** fmap unbundle . unbundle) . unbundle . hideReset circuitFunction . bundle . (bundle *** bundle . fmap bundle) where
+  s0 = (dfLikeS0 pxyA paramA, dfLikeS0 pxyB <$> paramsB, Nothing, repeat False)
+  circuitFunction reset inp = mux (unsafeToHighPolarity reset) (pure (dfLikeBlank pxyA paramA, dfLikeBlank pxyB <$> paramsB)) (mealy machineAsFunction s0 inp)
+  machineAsFunction (sA, sBs, sendingDat, alreadySents) (inpA, inpsB) = let
+    ((otpA, dat, _), sA') = runState (dfLikeFn pxyA paramA inpA (isNothing sendingDat && isJust dat) Nothing) sA
+    sendingDat' = sendingDat <|> dat
+    alreadySents' = if (isJust sendingDat' && isNothing sendingDat) then pure False else alreadySents
+    (otpB, (alreadySents'', sBs')) = second unzip . unzip $ individualBFn sendingDat' <$> alreadySents' <*> paramsB <*> inpsB <*> sBs
+    sendingDat'' = if alreadySents'' == repeat True then Nothing else sendingDat'
+    in ((sA', sBs', sendingDat'', alreadySents''), (otpA, otpB))
+  individualBFn maybeDat alreadySent param inp dfState = let
+    ((otp, _, ack), dfState') = runState (dfLikeFn pxyB param inp False (if alreadySent then Nothing else maybeDat)) dfState
+    alreadySent' = ack || alreadySent
+    in (otp, (alreadySent', dfState'))
 
 -- | Generalized fifo for DfLike
 -- Uses blockram to store data
