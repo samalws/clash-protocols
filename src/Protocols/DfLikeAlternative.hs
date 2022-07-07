@@ -34,9 +34,10 @@ import           Protocols.Internal
 
 
 -- | Describes how a protocol behaves at one side of a circuit, using a state machine
--- Can take parameters and provide whatever state type you would like
--- Can be used for either the left or right side of a circuit
--- Supports both input data and output data (TODO is it really DfLike then if there's data going both ways?)
+-- Can take parameters and provide whatever state type you would like.
+-- Defaults to being the right side of the circuit (Fwd ~ Otp, Bwd ~ Inp),
+-- but this can be switched using 'Reverse' from 'Protocols.Internal'.
+-- Supports both input data and output data (TODO is it really "Df Like" then if there's data going both ways?)
 class
   ( Protocol df
   , Fwd df ~ Unbundled (Dom df) (OtpData df)
@@ -45,33 +46,33 @@ class
   , Bundle (InpData df)
   , Bundle (OtpData df))
   => DfLikeAlternative df where
-  -- | TODO comment
+  -- | Domain that messages are being sent over
   type Dom df :: Domain
-  -- | TODO comment
-  type InpPayload df
-  -- | TODO comment
-  type OtpPayload df
-  -- | TODO comment
-  type OtpData df
-  -- | TODO comment
+  -- | Messages being sent in to this df port
   type InpData df
+  -- | Messages being sent out of this df port
+  type OtpData df
+  -- | Information being sent in to this df port
+  type InpPayload df
+  -- | Information being sent out of this df port
+  type OtpPayload df
   -- | State carried between clock cycles
   type DfLikeState df
   -- | User-provided parameters (e.g. address to respond to)
   type DfLikeParam df
   -- | Initial state, given user params
   dfLikeS0 :: Proxy df -> DfLikeParam df -> DfLikeState df
-  -- | Blank input, used when reset is on
-  -- Doesn't look at current state, but can look at user params
+  -- | Blank input, used when reset is on.
+  -- Doesn't look at current state, but can look at user params.
   -- Should not acknowledge any incoming data; doing so will result in data loss
   dfLikeBlank :: Proxy df -> DfLikeParam df -> OtpData df
   -- | State machine run every clock cycle at this port.
   -- Given user-provided params; input data at the port; acknowledge for inputted data (can be either True or False if there is no inputted data); and Maybe the next data item to output.
   -- Can update state using State monad.
   -- Returns data to output to the port; Maybe data inputted from the port; and whether an output data item was taken.
-  -- The 'Maybe datOtp' argument is allowed to change arbitrarily between clock cycles, as is the 'Maybe datInp' return value.
-  -- If the 'Maybe datInp' return value is 'Nothing', the 'Bool' argument can be either 'True' or 'False';
-  --   the same goes for the 'Maybe datOtp' argument and the 'Bool' return value.
+  -- The 'Maybe OtpPayload' argument is allowed to change arbitrarily between clock cycles, as is the 'Maybe InpPayload' return value.
+  -- If the 'Maybe InpPayload' return value is 'Nothing', the 'Bool' argument must be 'True';
+  --   the same goes for the 'Maybe OtpPayload' argument and the 'Bool' return value.
   dfLikeFn :: Proxy df -> DfLikeParam df -> InpData df -> Bool -> Maybe (OtpPayload df) -> State (DfLikeState df) (OtpData df, Maybe (InpPayload df), Bool)
 
 
@@ -160,7 +161,7 @@ instance (NFDataX wrUser, KnownNat wdBytes, KnownNat (Width aw), KnownNat (Width
      Reverse (Axi4WriteData dom 'KeepStrobe wdBytes wdUser),
      Axi4WriteResponse dom 'KeepResponse iw wrUser)
     = (BitVector (Width aw), wrUser)
-    -- write data address, user response for write
+    -- write data address, user data for write response
 
   dfLikeS0 _ _ = (Nothing, S2M_NoWriteResponse)
 
@@ -168,10 +169,10 @@ instance (NFDataX wrUser, KnownNat wdBytes, KnownNat (Width aw), KnownNat (Width
 
   dfLikeFn _ (dataAddr,wrUser) (wAddrVal, wDataVal, wRespAck) ack _ = do
     wAddrAck <- processWAddr wAddrVal
-    (wDataAck, toPop) <- processWData wDataVal
+    (wDataAck, inpItem) <- processWData wDataVal
     wRespVal <- gets snd
     processWRespAck
-    pure ((wAddrAck, wDataAck, wRespVal), toPop, False)
+    pure ((wAddrAck, wDataAck, wRespVal), inpItem, False)
     where
 
     processWAddr M2S_NoWriteAddress = pure (S2M_WriteAddress{_awready = False})
@@ -184,12 +185,16 @@ instance (NFDataX wrUser, KnownNat wdBytes, KnownNat (Width aw), KnownNat (Width
     processWData M2S_NoWriteData = pure (S2M_WriteData{_wready = False}, Nothing)
     processWData M2S_WriteData{_wlast, _wdata} = do
       (shouldRead,respS2M) <- get
-      -- we only want to output _wready = false if we're the recpient of the writes AND our buffer is full
-      -- we only want to push if we're the recpient of the writes AND our buffer has space available
-      if (isNothing shouldRead || not ack {- TODO -}) then pure (S2M_WriteData{_wready = isNothing shouldRead}, Nothing) else do
-        put (Nothing,
-             if _wlast then S2M_WriteResponse {_bid = fromJust shouldRead, _bresp = ROkay, _buser = wrUser } else respS2M)
-        pure (S2M_WriteData{_wready = True}, Just _wdata)
+      -- we only want to output _wready = false if we're the recpient of the writes AND ack is false
+      -- we only want to return data if we're the recpient of the writes
+      -- we only want to output on writeresponse if we're the recipient of the writes AND ack is true
+      case (shouldRead, ack) of
+        (Nothing, _) -> pure (S2M_WriteData{_wready = True}, Nothing)
+        (Just sr, False) -> pure (S2M_WriteData{_wready = False}, Just _wdata)
+        (Just sr, True) -> do
+          put (Nothing,
+               if _wlast then S2M_WriteResponse {_bid = sr, _bresp = ROkay, _buser = wrUser } else respS2M)
+          pure (S2M_WriteData{_wready = True}, Just _wdata)
 
     processWRespAck = when (_bready wRespAck) $ modify (\(a,_) -> (a,S2M_NoWriteResponse))
 
@@ -241,9 +246,9 @@ instance (NFDataX dat, NFDataX rdUser, KnownNat (Width aw), KnownNat (Width iw))
 
   dfLikeFn _ (dataAddr,usr) (addrVal, dataAck) _ otpItem = do
     addrAck <- processAddr addrVal
-    (dataVal,popped) <- sendData
+    (dataVal,sentData) <- sendData
     processDataAck dataAck
-    pure ((addrAck,dataVal),Nothing,popped)
+    pure ((addrAck,dataVal),Nothing,sentData)
     where
       processAddr M2S_NoReadAddress = pure (S2M_ReadAddress { _arready = False })
       processAddr M2S_ReadAddress{_arburst} | _arburst /= BmFixed = pure (S2M_ReadAddress{ _arready = True })
@@ -254,13 +259,13 @@ instance (NFDataX dat, NFDataX rdUser, KnownNat (Width aw), KnownNat (Width iw))
 
       sendData = do
         (burstLenLeft,readId,currOtp) <- get
-        popped <- case (currOtp, burstLenLeft == 0, otpItem) of
+        sentData <- case (currOtp, burstLenLeft == 0, otpItem) of
           (S2M_NoReadData, False, Just oi) -> do
             put (burstLenLeft-1, readId, S2M_ReadData { _rid = readId, _rdata = oi, _rresp = ROkay, _rlast = burstLenLeft == 1, _ruser = usr })
             pure True
           _ -> pure False
         (_,_,currOtp') <- get
-        pure (currOtp', popped)
+        pure (currOtp', sentData)
 
       processDataAck M2S_ReadData{_rready} = when _rready $ do
         (a,b,_) <- get
