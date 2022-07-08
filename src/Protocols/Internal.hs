@@ -18,6 +18,7 @@ import qualified Clash.Prelude as C
 import qualified Clash.Explicit.Prelude as CE
 
 import           Control.Applicative (Const(..))
+import           Control.Arrow ((***))
 import           Data.Coerce (coerce)
 import           Data.Default (Default(def))
 import           Data.Kind (Type)
@@ -721,8 +722,16 @@ instance Protocol a => Protocol (Reverse a) where
 reverseCircuit :: Circuit a b -> Circuit (Reverse b) (Reverse a)
 reverseCircuit ckt = Circuit (swap . toSignals ckt . swap)
 
-undoDoubleReverseInp :: Circuit (Reverse (Reverse a)) b -> Circuit a b
-undoDoubleReverseInp (Circuit f) = Circuit f
+coerceCircuit :: (Fwd a ~ Fwd a', Bwd a ~ Bwd a', Fwd b ~ Fwd b', Bwd b ~ Bwd b') => Circuit a b -> Circuit a' b'
+coerceCircuit (Circuit f) = Circuit f
 
-undoDoubleReverseOtp :: Circuit a (Reverse (Reverse b)) -> Circuit a b
-undoDoubleReverseOtp (Circuit f) = Circuit f
+mapCircuit :: (Fwd a' -> Fwd a) -> (Bwd a -> Bwd a') -> (Fwd b -> Fwd b') -> (Bwd b' -> Bwd b) -> Circuit a b -> Circuit a' b'
+mapCircuit ia oa ob ib (Circuit f) = Circuit ((oa *** ob) . f . (ia *** ib))
+
+vecCircuits :: (C.KnownNat n) => C.Vec n (Circuit a b) -> Circuit (C.Vec n a) (C.Vec n b)
+vecCircuits fs = Circuit (\inps -> C.unzip $ f <$> fs <*> uncurry C.zip inps) where
+  f (Circuit ff) x = ff x
+
+tupCircuits :: Circuit a b -> Circuit c d -> Circuit (a,c) (b,d)
+tupCircuits (Circuit f) (Circuit g) = Circuit (reorder . (f *** g) . reorder) where
+  reorder ((a,b),(c,d)) = ((a,c),(b,d))

@@ -45,6 +45,9 @@ genAxi4StreamByte = Gen.choice [pure AxStream.NullByte, pure AxStream.PositionBy
 
 instance (Hashable t, C.KnownNat n, 1 <= n, 1 <= (n C.- 1), 1 <= ((n C.- 1) C.- 1)) => Hashable (C.Vec n t)
 
+undoDoubleReverseInp :: Circuit (Reverse (Reverse a)) b -> Circuit a b
+undoDoubleReverseInp = coerceCircuit
+
 ---------------------------------------------------------------
 ---------------------------- TESTS ----------------------------
 ---------------------------------------------------------------
@@ -58,7 +61,7 @@ prop_df_fifo_id = propWithModelSingleDomain
                (\a b -> tally a === tally b)
   where
   ckt :: (C.HiddenClockResetEnable dom) => Circuit (Df dom Int) (Df dom Int)
-  ckt = undoDoubleReverseInp $ DfLikeAlt.fifo Proxy Proxy () () (C.SNat @10)
+  ckt = undoDoubleReverseInp $ DfLikeAlt.fifo (Proxy, ()) (Proxy, ()) (C.SNat @10)
 
 prop_axi4stream_fifo_id :: Property
 prop_axi4stream_fifo_id = propWithModelSingleDomain
@@ -70,7 +73,7 @@ prop_axi4stream_fifo_id = propWithModelSingleDomain
                       (\a b -> tally a === tally b)
   where
   ckt :: (C.HiddenClockResetEnable dom) => Circuit (AxStream.Axi4Stream dom 1 1 () (C.Vec 10 AxStream.Axi4StreamByte)) (AxStream.Axi4Stream dom 1 1 () (C.Vec 10 AxStream.Axi4StreamByte))
-  ckt = undoDoubleReverseInp $ DfLikeAlt.fifo Proxy Proxy () 1 (C.SNat @10)
+  ckt = undoDoubleReverseInp $ DfLikeAlt.fifo (Proxy, ()) (Proxy, 1) (C.SNat @10)
 
 prop_df_axi4stream_fifo_id :: Property
 prop_df_axi4stream_fifo_id = propWithModelSingleDomain
@@ -82,7 +85,7 @@ prop_df_axi4stream_fifo_id = propWithModelSingleDomain
                       (\a b -> tally a === tally b)
   where
   ckt :: (C.HiddenClockResetEnable dom) => Circuit (Df dom (C.Vec 10 AxStream.Axi4StreamByte)) (AxStream.Axi4Stream dom 1 1 () (C.Vec 10 AxStream.Axi4StreamByte))
-  ckt = undoDoubleReverseInp $ DfLikeAlt.fifo Proxy Proxy () 1 (C.SNat @10)
+  ckt = undoDoubleReverseInp $ DfLikeAlt.fifo (Proxy, ()) (Proxy, 1) (C.SNat @10)
 
 prop_axi4stream_df_fifo_id :: Property
 prop_axi4stream_df_fifo_id = propWithModelSingleDomain
@@ -94,7 +97,7 @@ prop_axi4stream_df_fifo_id = propWithModelSingleDomain
                       (\a b -> tally a === tally b)
   where
   ckt :: (C.HiddenClockResetEnable dom) => Circuit (AxStream.Axi4Stream dom 1 1 () (C.Vec 10 AxStream.Axi4StreamByte)) (Df dom (C.Vec 10 AxStream.Axi4StreamByte))
-  ckt = undoDoubleReverseInp $ DfLikeAlt.fifo Proxy Proxy () () (C.SNat @10)
+  ckt = undoDoubleReverseInp $ DfLikeAlt.fifo (Proxy, ()) (Proxy, ()) (C.SNat @10)
 
 prop_avalonstream_fifo_id :: Property
 prop_avalonstream_fifo_id = propWithModelSingleDomain
@@ -106,7 +109,7 @@ prop_avalonstream_fifo_id = propWithModelSingleDomain
                             (\a b -> tally a === tally b)
   where
   ckt :: (C.HiddenClockResetEnable dom) => Circuit (AvStream.AvalonStream dom 0 1 1 1 Int) (AvStream.AvalonStream dom 0 1 1 1 Int)
-  ckt = undoDoubleReverseInp $ DfLikeAlt.fifo Proxy Proxy () 1 (C.SNat @10)
+  ckt = undoDoubleReverseInp $ DfLikeAlt.fifo (Proxy, ()) (Proxy, 1) (C.SNat @10)
 
 prop_df_avalonstream_fifo_id :: Property
 prop_df_avalonstream_fifo_id = propWithModelSingleDomain
@@ -118,7 +121,7 @@ prop_df_avalonstream_fifo_id = propWithModelSingleDomain
                                (\a b -> tally a === tally b)
   where
   ckt :: (C.HiddenClockResetEnable dom) => Circuit (Df dom Int) (AvStream.AvalonStream dom 0 1 1 1 Int)
-  ckt = undoDoubleReverseInp $ DfLikeAlt.fifo Proxy Proxy () 1 (C.SNat @10)
+  ckt = undoDoubleReverseInp $ DfLikeAlt.fifo (Proxy, ()) (Proxy, 1) (C.SNat @10)
 
 prop_avalonstream_df_fifo_id :: Property
 prop_avalonstream_df_fifo_id = propWithModelSingleDomain
@@ -130,7 +133,7 @@ prop_avalonstream_df_fifo_id = propWithModelSingleDomain
                                (\a b -> tally a === tally b)
   where
   ckt :: (C.HiddenClockResetEnable dom) => Circuit (AvStream.AvalonStream dom 0 1 1 1 Int) (Df dom Int)
-  ckt = undoDoubleReverseInp $ DfLikeAlt.fifo Proxy Proxy () () (C.SNat @10)
+  ckt = undoDoubleReverseInp $ DfLikeAlt.fifo (Proxy, ()) (Proxy, ()) (C.SNat @10)
 
 prop_avalonmm_fifo_id :: Property
 prop_avalonmm_fifo_id = propWithModelSingleDomain
@@ -150,7 +153,7 @@ prop_avalonmm_fifo_id = propWithModelSingleDomain
                                              ('MM.AvalonMMMasterConfig 'True 1 1
                                                ('MM.AvalonMMSharedConfig 1 'True 'True 1 1 'True 'True 'True))
                                              () Int)
-  ckt = undoDoubleReverseInp $ DfLikeAlt.fifo Proxy Proxy 0 1 (C.SNat @10)
+  ckt = undoDoubleReverseInp $ DfLikeAlt.fifo (Proxy, 0) (Proxy, 1) (C.SNat @10)
 
 prop_avalonmm_avalonstream_fifo_id :: Property
 prop_avalonmm_avalonstream_fifo_id = propWithModelSingleDomain
@@ -167,7 +170,7 @@ prop_avalonmm_avalonstream_fifo_id = propWithModelSingleDomain
                                                ('MM.AvalonMMSharedConfig 1 'True 'True 1 1 'True 'True 'True))
                                              () Int)
                                            (AvStream.AvalonStream dom 0 1 1 1 Int)
-  ckt = undoDoubleReverseInp $ DfLikeAlt.fifo Proxy Proxy 0 1 (C.SNat @10)
+  ckt = undoDoubleReverseInp $ DfLikeAlt.fifo (Proxy, 0) (Proxy, 1) (C.SNat @10)
 
 prop_avalonstream_avalonmm_fifo_id :: Property
 prop_avalonstream_avalonmm_fifo_id = propWithModelSingleDomain
@@ -184,22 +187,22 @@ prop_avalonstream_avalonmm_fifo_id = propWithModelSingleDomain
                                              ('MM.AvalonMMMasterConfig 'True 1 1
                                                ('MM.AvalonMMSharedConfig 1 'True 'True 1 1 'True 'True 'True))
                                              () Int)
-  ckt = undoDoubleReverseInp $ DfLikeAlt.fifo Proxy Proxy () 1 (C.SNat @10)
+  ckt = undoDoubleReverseInp $ DfLikeAlt.fifo (Proxy, ()) (Proxy, 1) (C.SNat @10)
 
 prop_df_map_inc :: Property
 prop_df_map_inc = DfTest.idWithModelDf' (fmap (+ 1)) (C.withClockResetEnable C.clockGen C.resetGen C.enableGen ckt) where
   ckt :: (C.HiddenClockResetEnable dom) => Circuit (Df dom Int) (Df dom Int)
-  ckt = undoDoubleReverseInp $ DfLikeAlt.map Proxy Proxy () () (+1)
+  ckt = undoDoubleReverseInp $ DfLikeAlt.map (Proxy, ()) (Proxy, ()) (+1)
 
 prop_df_filter_over_5 :: Property
 prop_df_filter_over_5 = DfTest.idWithModelDf' (filter (> 5)) (C.withClockResetEnable C.clockGen C.resetGen C.enableGen ckt) where
   ckt :: (C.HiddenClockResetEnable dom) => Circuit (Df dom Int) (Df dom Int)
-  ckt = undoDoubleReverseInp $ DfLikeAlt.filter Proxy Proxy () () (> 5)
+  ckt = undoDoubleReverseInp $ DfLikeAlt.filter (Proxy, ()) (Proxy, ()) (> 5)
 
 prop_df_mapmaybe_inc_over_5 :: Property
 prop_df_mapmaybe_inc_over_5 = DfTest.idWithModelDf' (map (+ 1) . filter (> 5)) (C.withClockResetEnable C.clockGen C.resetGen C.enableGen ckt) where
   ckt :: (C.HiddenClockResetEnable dom) => Circuit (Df dom Int) (Df dom Int)
-  ckt = undoDoubleReverseInp $ DfLikeAlt.mapMaybe Proxy Proxy () () (\n -> if n > 5 then Just (n+1) else Nothing)
+  ckt = undoDoubleReverseInp $ DfLikeAlt.mapMaybe (Proxy, ()) (Proxy, ()) (\n -> if n > 5 then Just (n+1) else Nothing)
 
 prop_df_zipwith_add :: Property
 prop_df_zipwith_add =
@@ -213,8 +216,8 @@ prop_df_zipwith_add =
     (uncurry (zipWith (+)))
     (C.withClockResetEnable @C.System C.clockGen C.resetGen C.enableGen ckt)
   where
-  ckt_ :: (C.HiddenClockResetEnable dom) => Circuit (Reverse (Reverse (Df dom Int)), Reverse (Reverse (Df dom Int))) (Df dom Int)
-  ckt_ = DfLikeAlt.zipWith Proxy Proxy Proxy () () () (+)
+  ckt_ :: (C.HiddenClockResetEnable dom) => Circuit (Reverse (Reverse (Df dom Int), Reverse (Df dom Int))) (Df dom Int)
+  ckt_ = DfLikeAlt.zipWith ((Proxy, ()), (Proxy, ())) (Proxy, ()) (+)
   ckt :: (C.HiddenClockResetEnable dom) => Circuit (Df dom Int, Df dom Int) (Df dom Int)
   ckt = let Circuit f = ckt_ in Circuit f
 
@@ -228,7 +231,7 @@ prop_fanout1 =
     (C.exposeClockResetEnable ckt)
   where
   ckt :: (C.HiddenClockResetEnable dom) => Circuit (Df dom Int) (C.Vec 1 (Df dom Int))
-  ckt = undoDoubleReverseInp $ DfLikeAlt.fanout Proxy Proxy () (C.repeat ())
+  ckt = undoDoubleReverseInp $ DfLikeAlt.fanout (Proxy, ()) (C.repeat (Proxy, ()))
 
 prop_fanout2 :: Property
 prop_fanout2 =
@@ -240,7 +243,7 @@ prop_fanout2 =
     (C.exposeClockResetEnable ckt)
   where
   ckt :: (C.HiddenClockResetEnable dom) => Circuit (Df dom Int) (C.Vec 2 (Df dom Int))
-  ckt = undoDoubleReverseInp $ DfLikeAlt.fanout Proxy Proxy () (C.repeat ())
+  ckt = undoDoubleReverseInp $ DfLikeAlt.fanout (Proxy, ()) (C.repeat (Proxy, ()))
 
 prop_fanout7 :: Property
 prop_fanout7 =
@@ -252,7 +255,7 @@ prop_fanout7 =
     (C.exposeClockResetEnable ckt)
   where
   ckt :: (C.HiddenClockResetEnable dom) => Circuit (Df dom Int) (C.Vec 7 (Df dom Int))
-  ckt = undoDoubleReverseInp $ DfLikeAlt.fanout Proxy Proxy () (C.repeat ())
+  ckt = undoDoubleReverseInp $ DfLikeAlt.fanout (Proxy, ()) (C.repeat (Proxy, ()))
 
 
 tests :: TestTree
