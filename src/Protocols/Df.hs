@@ -53,6 +53,8 @@ module Protocols.Df
 
     -- * Internals
   , forceResetSanity
+  , dataToMaybe
+  , maybeToData
   ) where
 
 -- base
@@ -112,7 +114,7 @@ data Data a
   = NoData
   -- | Send /a/
   | Data !a
-  deriving (Functor, Generic, C.NFDataX, C.ShowX, Eq, NFData, Show)
+  deriving (Functor, Generic, C.NFDataX, C.ShowX, Eq, NFData, Show, C.Bundle)
 
 instance Applicative Data where
   pure = Data
@@ -135,6 +137,11 @@ instance Monad Data where
 dataToMaybe :: Data a -> Maybe a
 dataToMaybe NoData = Nothing
 dataToMaybe (Data a) = Just a
+
+-- | Convert 'Maybe' to 'Data'. Produces 'Data' on 'Just', 'NoData' on 'Nothing'.
+maybeToData :: Maybe a -> Data a
+maybeToData Nothing = NoData
+maybeToData (Just a) = Data a
 
 instance (C.KnownDomain dom, C.NFDataX a, C.ShowX a, Show a) => Simulate (Df dom a) where
   type SimulateFwdType (Df dom a) = [Data a]
