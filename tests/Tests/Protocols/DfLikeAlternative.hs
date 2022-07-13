@@ -1,5 +1,4 @@
 {-# LANGUAGE NumericUnderscores #-}
-{-# OPTIONS_GHC -fno-warn-orphans #-} -- Hashable (Index n)
 
 module Tests.Protocols.DfLikeAlternative where
 
@@ -8,6 +7,9 @@ import Prelude
 
 -- clash-prelude
 import qualified Clash.Prelude as C
+
+-- list
+import Data.List (partition, transpose)
 
 -- extra
 import Data.Proxy (Proxy(..))
@@ -37,17 +39,12 @@ undoDoubleReverseInp = coerceCircuit
 ---------------------------------------------------------------
 ---------------------------- TESTS ----------------------------
 ---------------------------------------------------------------
-prop_df_fifo_id :: Property
-prop_df_fifo_id = propWithModelSingleDomain
-               @C.System
-               defExpectOptions
-               (DfTest.genData DfTest.genSmallInt)
-               (C.exposeClockResetEnable id)
-               (C.exposeClockResetEnable @C.System ckt)
-               (\a b -> tally a === tally b)
-  where
-  ckt :: (C.HiddenClockResetEnable dom) => Circuit (Df dom Int) (Df dom Int)
-  ckt = undoDoubleReverseInp $ DfLikeAlt.fifo (Proxy, ()) (Proxy, ()) (C.SNat @10)
+
+-- test a small selection of dflike functions on df
+-- this is moreso to test @instance DfLikeAlternative Df@,
+-- as well as @dfToDfLikeInp@ etc,
+-- rather than the functions themselves,
+-- since we know they work from @Tests.Protocols.Df@
 
 prop_df_map_inc :: Property
 prop_df_map_inc = DfTest.idWithModelDf' (fmap (+ 1)) (C.withClockResetEnable C.clockGen C.resetGen C.enableGen ckt) where
@@ -79,10 +76,10 @@ prop_df_zipwith_add =
   ckt_ :: (C.HiddenClockResetEnable dom) => Circuit (Reverse (Reverse (Df dom Int), Reverse (Df dom Int))) (Df dom Int)
   ckt_ = DfLikeAlt.zipWith ((Proxy, ()), (Proxy, ())) (Proxy, ()) (+)
   ckt :: (C.HiddenClockResetEnable dom) => Circuit (Df dom Int, Df dom Int) (Df dom Int)
-  ckt = let Circuit f = ckt_ in Circuit f
+  ckt = coerceCircuit ckt_
 
-prop_fanout1 :: Property
-prop_fanout1 =
+prop_df_fanout1 :: Property
+prop_df_fanout1 =
   idWithModelSingleDomain
     @C.System
     defExpectOptions
@@ -93,8 +90,8 @@ prop_fanout1 =
   ckt :: (C.HiddenClockResetEnable dom) => Circuit (Df dom Int) (C.Vec 1 (Df dom Int))
   ckt = undoDoubleReverseInp $ DfLikeAlt.fanout (Proxy, ()) (C.repeat (Proxy, ()))
 
-prop_fanout2 :: Property
-prop_fanout2 =
+prop_df_fanout2 :: Property
+prop_df_fanout2 =
   idWithModelSingleDomain
     @C.System
     defExpectOptions
@@ -105,8 +102,8 @@ prop_fanout2 =
   ckt :: (C.HiddenClockResetEnable dom) => Circuit (Df dom Int) (C.Vec 2 (Df dom Int))
   ckt = undoDoubleReverseInp $ DfLikeAlt.fanout (Proxy, ()) (C.repeat (Proxy, ()))
 
-prop_fanout7 :: Property
-prop_fanout7 =
+prop_df_fanout7 :: Property
+prop_df_fanout7 =
   idWithModelSingleDomain
     @C.System
     defExpectOptions
@@ -116,6 +113,44 @@ prop_fanout7 =
   where
   ckt :: (C.HiddenClockResetEnable dom) => Circuit (Df dom Int) (C.Vec 7 (Df dom Int))
   ckt = undoDoubleReverseInp $ DfLikeAlt.fanout (Proxy, ()) (C.repeat (Proxy, ()))
+
+prop_df_partition :: Property
+prop_df_partition =
+  idWithModelSingleDomain
+    @C.System
+    defExpectOptions
+    (DfTest.genData DfTest.genSmallInt)
+    (C.exposeClockResetEnable $ partition (>5))
+    (C.exposeClockResetEnable ckt)
+  where
+  ckt :: (C.HiddenClockResetEnable dom) => Circuit (Df dom Int) (Df dom Int, Df dom Int)
+  ckt = undoDoubleReverseInp $ DfLikeAlt.partition (Proxy, ()) ((Proxy, ()), (Proxy, ())) (> 5)
+
+prop_df_fanin :: Property
+prop_df_fanin =
+  idWithModelSingleDomain
+    @C.System
+    defExpectOptions
+    (DfTest.genVecData DfTest.genSmallInt)
+    (C.exposeClockResetEnable $ map sum . transpose . C.toList)
+    (C.exposeClockResetEnable ckt)
+  where
+  ckt_ :: (C.HiddenClockResetEnable dom) => Circuit (C.Vec 3 (Reverse (Reverse (Df dom Int)))) (Df dom Int)
+  ckt_ = DfLikeAlt.fanin (C.repeat (Proxy, ())) (Proxy, ()) (+)
+  ckt :: (C.HiddenClockResetEnable dom) => Circuit (C.Vec 3 (Df dom Int)) (Df dom Int)
+  ckt = coerceCircuit ckt_
+
+prop_df_fifo_id :: Property
+prop_df_fifo_id = propWithModelSingleDomain
+               @C.System
+               defExpectOptions
+               (DfTest.genData DfTest.genSmallInt)
+               (C.exposeClockResetEnable id)
+               (C.exposeClockResetEnable @C.System ckt)
+               (\a b -> tally a === tally b)
+  where
+  ckt :: (C.HiddenClockResetEnable dom) => Circuit (Df dom Int) (Df dom Int)
+  ckt = undoDoubleReverseInp $ DfLikeAlt.fifo (Proxy, ()) (Proxy, ()) (C.SNat @10)
 
 
 tests :: TestTree
