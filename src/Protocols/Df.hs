@@ -71,6 +71,7 @@ import qualified Data.Bifunctor as B
 import           Data.Bool (bool)
 import           Data.Coerce (coerce)
 import           Data.Kind (Type)
+import           Data.List ((\\))
 import qualified Data.List.NonEmpty
 import qualified Data.Maybe as Maybe
 import           Data.Proxy
@@ -165,8 +166,8 @@ instance (C.KnownDomain dom, C.NFDataX a, C.ShowX a, Show a) => Drivable (Df dom
   toSimulateType Proxy = P.map Data
   fromSimulateType Proxy = Maybe.mapMaybe dataToMaybe
 
-  driveC = drive
-  sampleC = sample
+  driveC conf vals = drive conf (dataToMaybe <$> vals)
+  sampleC conf ckt = maybeToData <$> sample conf ckt
 
 
 instance DfLike dom (Df dom) a where
@@ -719,76 +720,15 @@ fifo fifoDepth = Circuit $ C.hideReset circuitFunction where
 
 --------------------------------- SIMULATE -------------------------------------
 
-{-
 -- | Emit values given in list. Emits no data while reset is asserted. Not
 -- synthesizable.
 drive ::
   forall dom a.
-  C.KnownDomain dom =>
-  SimulationConfig ->
-  [Data a] ->
-  Circuit () (Df dom a)
-drive = DfLike.drive Proxy
-
--- | Sample protocol to a list of values. Drops values while reset is asserted.
--- Not synthesizable.
---
--- For a generalized version of 'sample', check out 'sampleC'.
-sample ::
-  forall dom b.
-  C.KnownDomain dom =>
-  SimulationConfig ->
-  Circuit () (Df dom b) ->
-  [Data b]
-sample = DfLike.sample Proxy
-
--- | Stall every valid Df packet with a given number of cycles. If there are
--- more valid packets than given numbers, passthrough all valid packets without
--- stalling. Not synthesizable.
---
--- For a generalized version of 'stall', check out 'stallC'.
-stall ::
-  forall dom a.
-  ( C.KnownDomain dom
-  , HasCallStack ) =>
-  SimulationConfig ->
-  -- | Acknowledgement to send when LHS does not send data. Stall will act
-  -- transparently when reset is asserted.
-  StallAck ->
-  -- Number of cycles to stall for every valid Df packet
-  [Int] ->
-  Circuit (Df dom a) (Df dom a)
-stall = DfLike.stall Proxy
-
--- | Simulate a single domain protocol. Not synthesizable.
---
--- For a generalized version of 'simulate', check out 'Protocols.simulateC'.
-simulate ::
-  forall dom a b.
-  C.KnownDomain dom =>
-  -- | Simulation configuration. Use 'Data.Default.def' for sensible defaults.
-  SimulationConfig ->
-  -- | Circuit to simulate.
-  ( C.Clock dom ->
-    C.Reset dom ->
-    C.Enable dom ->
-    Circuit (Df dom a) (Df dom b) ) ->
-  -- | Inputs
-  [Data a] ->
-  -- | Outputs
-  [Data b]
-simulate = DfLike.simulate Proxy Proxy
--}
-
--- | Emit values given in list. Emits no data while reset is asserted. Not
--- synthesizable.
-drive ::
-  forall dom df a.
   ( C.KnownDomain dom ) =>
   SimulationConfig ->
-  [Data a] -> -- TODO
+  [Maybe a] ->
   Circuit () (Df dom a)
-drive dfA SimulationConfig{resetCycles} s0 = Circuit $
+drive SimulationConfig{resetCycles} s0 = Circuit $
     ((),)
   . C.fromList_lazy
   . go s0 resetCycles
@@ -796,26 +736,27 @@ drive dfA SimulationConfig{resetCycles} s0 = Circuit $
   . P.snd
  where
   go _ resetN  ~(ack:acks) | resetN > 0 =
-    NoData dfA : (ack `C.seqX` go s0 (resetN - 1) acks)
+    NoData : (ack `C.seqX` go s0 (resetN - 1) acks)
   go [] _ ~(ack:acks) =
     NoData : (ack `C.seqX` go [] 0 acks)
-  go (NoData:is)  _ ~(ack:acks) =
+  go (Nothing:is)  _ ~(ack:acks) =
     NoData : (ack `C.seqX` go is 0 acks)
-  go (Data dat:is)  _ ~(Ack ack:acks) =
-    Data dat : go (if ack then is else dat:is) 0 acks
+  go (Just dat:is)  _ ~(Ack ack:acks) =
+    Data dat : go (if ack then is else Just dat:is) 0 acks
 
 -- | Sample protocol to a list of values. Drops values while reset is asserted.
 -- Not synthesizable.
 --
 -- For a generalized version of 'sample', check out 'sampleC'.
 sample ::
-  forall dom df b.
+  forall dom b.
   ( C.KnownDomain dom ) =>
   SimulationConfig ->
   Circuit () (Df dom b) ->
-  [Data b] -- TODO should be maybe
-sample dfB SimulationConfig{..} c =
-    P.take timeoutAfter
+  [Maybe b]
+sample SimulationConfig{..} c =
+    fmap dataToMaybe
+  $ P.take timeoutAfter
   $ CE.sample_lazy
   $ ignoreWhileInReset
   $ P.snd
@@ -833,7 +774,7 @@ sample dfB SimulationConfig{..} c =
 --
 -- For a generalized version of 'stall', check out 'stallC'.
 stall ::
-  forall dom df a.
+  forall dom a.
   ( C.KnownDomain dom
   , HasCallStack ) =>
   SimulationConfig ->
@@ -843,7 +784,7 @@ stall ::
   -- Number of cycles to stall for every valid Df packet
   [Int] ->
   Circuit (Df dom a) (Df dom a)
-stall dfA SimulationConfig{..} stallAck stalls = Circuit $
+stall SimulationConfig{..} stallAck stalls = Circuit $
   uncurry (go stallAcks stalls resetCycles)
  where
   stallAcks
@@ -897,7 +838,7 @@ stall dfA SimulationConfig{..} stallAck stalls = Circuit $
 --
 -- For a generalized version of 'simulate', check out 'Protocols.simulateC'.
 simulate ::
-  forall dom df a b.
+  forall dom a b.
   ( C.KnownDomain dom ) =>
   -- | Simulation configuration. Use 'Data.Default.def' for sensible defaults.
   SimulationConfig ->
@@ -907,10 +848,16 @@ simulate ::
     C.Enable dom ->
     Circuit (Df dom a) (Df dom b) ) ->
   -- | Inputs
-  [Data a] ->
+  [Maybe a] ->
   -- | Outputs
-  [Data b]
-simulate dfA dfB conf@SimulationConfig{..} circ inputs =
-  sample dfB conf (drive dfA conf inputs |> circ clk rst ena)
+  [Maybe b]
+simulate conf@SimulationConfig{..} circ inputs =
+  sample conf (drive conf inputs |> circ clk rst ena)
  where
   (clk, rst, ena) = (C.clockGen, resetGen resetCycles, C.enableGen)
+
+-- | Like 'C.resetGenN', but works on 'Int' instead of 'C.SNat'. Not
+-- synthesizable.
+resetGen :: C.KnownDomain dom => Int -> C.Reset dom
+resetGen n = C.unsafeFromHighPolarity
+  (C.fromList (replicate n True <> repeat False))

@@ -58,6 +58,12 @@ module Protocols.DfLikeAlternative
   , registerFwd
   , registerBwd
   , fifo
+
+    -- * Simulation functions
+  , drive
+  , sample
+  , stall
+  , simulate
   ) where
 
 
@@ -66,9 +72,10 @@ import           Control.Arrow ((***))
 import           Control.Monad (when)
 import           Control.Monad.State (State, runState, get, put, gets, modify)
 import           Clash.Prelude hiding
-                   (map, fst, snd, zipWith, const, pure, filter, either, zip, select)
+                   (map, fst, snd, zipWith, const, pure, filter, either, zip, select, sample, simulate)
 import qualified Data.Bifunctor as B
 import           Data.Proxy (Proxy(..))
+import           GHC.Stack (HasCallStack)
 
 -- me
 import qualified Protocols.DfLike as DfLike -- TODO
@@ -959,3 +966,89 @@ fifo argsA argsB fifoDepth
   =  dfToDfLikeInp argsA
   |> Df.fifo fifoDepth
   |> dfToDfLikeOtp argsB where
+
+-- | Emit values given in list. Emits no data while reset is asserted. Not
+-- synthesizable.
+drive ::
+  ( DfLikeAlternative dfA
+  , HiddenClockResetEnable (Dom dfA) ) =>
+  (Proxy dfA, DfLikeParam dfA) ->
+  SimulationConfig ->
+  [Maybe (FwdPayload dfA)] ->
+  Circuit () dfA
+drive dfA conf s0 = Df.drive conf s0 |> dfToDfLikeOtp dfA
+
+-- | Sample protocol to a list of values. Drops values while reset is asserted.
+-- Not synthesizable.
+--
+-- For a generalized version of 'sample', check out 'sampleC'.
+sample ::
+  ( DfLikeAlternative dfB
+  , HiddenClockResetEnable (Dom dfB) ) =>
+  (Proxy dfB, DfLikeParam dfB) ->
+  SimulationConfig ->
+  Circuit () (Reverse dfB) ->
+  [Maybe (BwdPayload dfB)]
+sample dfB conf c = Df.sample conf (c |> dfToDfLikeInp dfB)
+
+-- | Stall every valid Df packet with a given number of cycles. If there are
+-- more valid packets than given numbers, passthrough all valid packets without
+-- stalling. Not synthesizable.
+--
+-- For a generalized version of 'stall', check out 'stallC'.
+stall ::
+  ( DfLikeAlternative dfA
+  , DfLikeAlternative dfB
+  , Dom dfA ~ Dom dfB
+  , HiddenClockResetEnable (Dom dfA)
+  , BwdPayload dfA ~ FwdPayload dfB
+  , HasCallStack ) =>
+  (Proxy dfA, DfLikeParam dfA) ->
+  (Proxy dfB, DfLikeParam dfB) ->
+  SimulationConfig ->
+  -- | Acknowledgement to send when LHS does not send data. Stall will act
+  -- transparently when reset is asserted.
+  StallAck ->
+  -- Number of cycles to stall for every valid Df packet
+  [Int] ->
+  Circuit (Reverse dfA) dfB
+stall dfA dfB conf stallAck stalls
+  =  dfToDfLikeInp dfA
+  |> Df.stall conf stallAck stalls
+  |> dfToDfLikeOtp dfB
+
+-- | Simulate a single domain protocol. Not synthesizable.
+--
+-- For a generalized version of 'simulate', check out 'Protocols.simulateC'.
+--
+-- You may notice that things seem to be "switched around"
+-- in this function compared to others
+-- (the @Circuit@ has @Reverse@ applied to its right side,
+-- rather than its left, and we take the @FwdPayload@
+-- of @dfA@ rather than @dfB@).
+-- This is because we are taking a @Circuit@ as a parameter,
+-- rather than returning a @Circuit@ like most other functions do.
+simulate ::
+  ( DfLikeAlternative dfA
+  , DfLikeAlternative dfB
+  , Dom dfA ~ Dom dfB
+  , KnownDomain (Dom dfA)
+  , HasCallStack ) =>
+  (Proxy dfA, DfLikeParam dfA) ->
+  (Proxy dfB, DfLikeParam dfB) ->
+  -- | Simulation configuration. Use 'Data.Default.def' for sensible defaults.
+  SimulationConfig ->
+  -- | Circuit to simulate.
+  ( Clock (Dom dfA) ->
+    Reset (Dom dfA) ->
+    Enable (Dom dfA) ->
+    Circuit dfA (Reverse dfB) ) ->
+  -- | Inputs
+  [Maybe (FwdPayload dfA)] ->
+  -- | Outputs
+  [Maybe (BwdPayload dfB)]
+simulate dfA dfB conf circ inputs = Df.simulate conf circ' inputs where
+  circ' clk rst en
+    =  withClockResetEnable clk rst en (dfToDfLikeOtp dfA)
+    |> circ clk rst en
+    |> withClockResetEnable clk rst en (dfToDfLikeInp dfB)
