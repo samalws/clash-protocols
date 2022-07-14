@@ -14,7 +14,6 @@ module Protocols.Axi4.ReadAddress
   ( M2S_ReadAddress(..)
   , S2M_ReadAddress(..)
   , Axi4ReadAddress
-  , mapFull
   ) where
 
 -- base
@@ -32,38 +31,75 @@ import Protocols.Internal
 import Protocols.DfLike (DfLike)
 import qualified Protocols.DfLike as DfLike
 
+data Axi4ReadAddressConfig = Axi4ReadAddressConfig
+  { _raKeepBurst       :: Bool
+  , _raKeepSize        :: Bool
+  , _raLengthWidth     :: C.Nat
+  , _raIdWidth         :: C.Nat
+  , _raAddrWidth       :: C.Nat
+  , _raKeepRegion      :: Bool
+  , _raKeepBurstLength :: Bool
+  , _raKeepLock        :: Bool
+  , _raKeepCache       :: Bool
+  , _raKeepPermissions :: Bool
+  , _raKeepQos         :: Bool
+  }
+
+type family RAKeepBurst (conf :: Axi4ReadAddressConfig) where
+  RAKeepBurst ('Axi4ReadAddressConfig a _ _ _ _ _ _ _ _ _ _) = a
+
+type family RAKeepSize (conf :: Axi4ReadAddressConfig) where
+  RAKeepSize ('Axi4ReadAddressConfig _ a _ _ _ _ _ _ _ _ _) = a
+
+type family RALengthWidth (conf :: Axi4ReadAddressConfig) where
+  RALengthWidth ('Axi4ReadAddressConfig _ _ a _ _ _ _ _ _ _ _) = a
+
+type family RAIdWidth (conf :: Axi4ReadAddressConfig) where
+  RAIdWidth ('Axi4ReadAddressConfig _ _ _ a _ _ _ _ _ _ _) = a
+
+type family RAAddrWidth (conf :: Axi4ReadAddressConfig) where
+  RAAddrWidth ('Axi4ReadAddressConfig _ _ _ _ a _ _ _ _ _ _) = a
+
+type family RAKeepRegion (conf :: Axi4ReadAddressConfig) where
+  RAKeepRegion ('Axi4ReadAddressConfig _ _ _ _ _ a _ _ _ _ _) = a
+
+type family RAKeepBurstLength (conf :: Axi4ReadAddressConfig) where
+  RAKeepBurstLength ('Axi4ReadAddressConfig _ _ _ _ _ _ a _ _ _ _) = a
+
+type family RAKeepLock (conf :: Axi4ReadAddressConfig) where
+  RAKeepLock ('Axi4ReadAddressConfig _ _ _ _ _ _ _ a _ _ _) = a
+
+type family RAKeepCache (conf :: Axi4ReadAddressConfig) where
+  RAKeepCache ('Axi4ReadAddressConfig _ _ _ _ _ _ _ _ a _ _) = a
+
+type family RAKeepPermissions (conf :: Axi4ReadAddressConfig) where
+  RAKeepPermissions ('Axi4ReadAddressConfig _ _ _ _ _ _ _ _ _ a _) = a
+
+type family RAKeepQos (conf :: Axi4ReadAddressConfig) where
+  RAKeepQos ('Axi4ReadAddressConfig _ _ _ _ _ _ _ _ _ _ a) = a
+
 -- | AXI4 Read Address channel protocol
 data Axi4ReadAddress
   (dom :: C.Domain)
-  (kb :: KeepBurst)
-  (ksz :: KeepSize)
-  (lw :: LengthWidth)
-  (iw :: IdWidth)
-  (aw :: AddrWidth)
-  (kr :: KeepRegion)
-  (kbl :: KeepBurstLength)
-  (kl :: KeepLock)
-  (kc :: KeepCache)
-  (kp :: KeepPermissions)
-  (kq :: KeepQos)
+  (conf :: Axi4ReadAddressConfig)
   (userType :: Type)
 
-instance Protocol (Axi4ReadAddress dom kb ksz lw iw aw kr kbl kl kc kp kq userType) where
-  type Fwd (Axi4ReadAddress dom kb ksz lw iw aw kr kbl kl kc kp kq userType) =
-    C.Signal dom (M2S_ReadAddress kb ksz lw iw aw kr kbl kl kc kp kq userType)
-  type Bwd (Axi4ReadAddress dom kb ksz lw iw aw kr kbl kl kc kp kq userType) =
+instance Protocol (Axi4ReadAddress dom conf userType) where
+  type Fwd (Axi4ReadAddress dom conf userType) =
+    C.Signal dom (M2S_ReadAddress conf userType)
+  type Bwd (Axi4ReadAddress dom conf userType) =
     C.Signal dom S2M_ReadAddress
 
-instance Backpressure (Axi4ReadAddress dom kb ksz lw iw aw kr kbl kl kc kp kq userType) where
+instance Backpressure (Axi4ReadAddress dom conf userType) where
   boolsToBwd _ = C.fromList_lazy . coerce
 
-instance DfLike dom (Axi4ReadAddress dom kb ksz lw iw aw kr kbl kl kc kp kq) userType where
-  type Data (Axi4ReadAddress dom kb ksz lw iw aw kr kbl kl kc kp kq) userType =
-    M2S_ReadAddress kb ksz lw iw aw kr kbl kl kc kp kq userType
+instance DfLike dom (Axi4ReadAddress dom conf) userType where
+  type Data (Axi4ReadAddress dom conf) userType =
+    M2S_ReadAddress conf userType
 
   type Payload userType = userType
 
-  type Ack (Axi4ReadAddress dom kb ksz lw iw aw kr kbl kl kc kp kq) userType =
+  type Ack (Axi4ReadAddress dom conf) userType =
     S2M_ReadAddress
 
   getPayload _ (M2S_ReadAddress{_aruser}) = Just _aruser
@@ -84,15 +120,15 @@ instance DfLike dom (Axi4ReadAddress dom kb ksz lw iw aw kr kbl kl kc kp kq) use
   {-# INLINE ackToBool #-}
 
 instance (C.KnownDomain dom, C.NFDataX userType, C.ShowX userType, Show userType) =>
-  Simulate (Axi4ReadAddress dom kb ksz lw iw aw kr kbl kl kc kp kq userType) where
+  Simulate (Axi4ReadAddress dom conf userType) where
 
-  type SimulateFwdType (Axi4ReadAddress dom kb ksz lw iw aw kr kbl kl kc kp kq userType) =
-    [M2S_ReadAddress kb ksz lw iw aw kr kbl kl kc kp kq userType]
+  type SimulateFwdType (Axi4ReadAddress dom conf userType) =
+    [M2S_ReadAddress conf userType]
 
-  type SimulateBwdType (Axi4ReadAddress dom kb ksz lw iw aw kr kbl kl kc kp kq userType) =
+  type SimulateBwdType (Axi4ReadAddress dom conf userType) =
     [S2M_ReadAddress]
 
-  type SimulateChannels (Axi4ReadAddress dom kb ksz lw iw aw kr kbl kl kc kp kq userType) = 1
+  type SimulateChannels (Axi4ReadAddress dom conf userType) = 1
 
   simToSigFwd Proxy = C.fromList_lazy
   simToSigBwd Proxy = C.fromList_lazy
@@ -105,49 +141,39 @@ instance (C.KnownDomain dom, C.NFDataX userType, C.ShowX userType, Show userType
 -- | See Table A2-5 "Read address channel signals"
 
 data M2S_ReadAddress
-  (kb :: KeepBurst)
-  (ksz :: KeepSize)
-  (lw :: LengthWidth)
-  (iw :: IdWidth)
-  (aw :: AddrWidth)
-  (kr :: KeepRegion)
-  (kbl :: KeepBurstLength)
-  (kl :: KeepLock)
-  (kc :: KeepCache)
-  (kp :: KeepPermissions)
-  (kq :: KeepQos)
+  (conf :: Axi4ReadAddressConfig)
   (userType :: Type)
   = M2S_NoReadAddress
   | M2S_ReadAddress
     { -- | Read address id*
-      _arid :: !(C.BitVector (Width iw))
+      _arid :: !(C.BitVector (RAIdWidth conf))
 
       -- | Read address
-    , _araddr :: !(C.BitVector (Width aw))
+    , _araddr :: !(C.BitVector (RAAddrWidth conf))
 
       -- | Read region*
-    , _arregion :: !(RegionType kr)
+    , _arregion :: !(RegionType (RAKeepRegion conf))
 
       -- | Burst length*
-    , _arlen :: !(BurstLengthType kbl)
+    , _arlen :: !(BurstLengthType (RAKeepBurstLength conf))
 
       -- | Burst size*
-    , _arsize :: !(SizeType ksz)
+    , _arsize :: !(SizeType (RAKeepSize conf))
 
       -- | Burst type*
-    , _arburst :: !(BurstType kb)
+    , _arburst :: !(BurstType (RAKeepBurst conf))
 
       -- | Lock type*
-    , _arlock :: !(LockType kl)
+    , _arlock :: !(LockType (RAKeepLock conf))
 
       -- | Cache type* (has been renamed to modifiable in AXI spec)
-    , _arcache :: !(CacheType kc)
+    , _arcache :: !(CacheType (RAKeepCache conf))
 
       -- | Protection type
-    , _arprot :: !(PermissionsType kp)
+    , _arprot :: !(PermissionsType (RAKeepPermissions conf))
 
       -- | QoS value
-    , _arqos :: !(QosType kq)
+    , _arqos :: !(QosType (RAKeepQos conf))
 
       -- | User data
     , _aruser :: !userType
@@ -158,49 +184,3 @@ data M2S_ReadAddress
 newtype S2M_ReadAddress = S2M_ReadAddress
   { _arready :: Bool }
   deriving (Show, Generic, C.NFDataX)
-
-deriving instance
-  ( C.KnownNat (Width iw)
-  , C.KnownNat (Width aw)
-  , Show (SizeType ksz)
-  , Show (BurstType kb)
-  , Show userType
-  , Show (RegionType kr)
-  , Show (BurstLengthType kbl)
-  , Show (LockType kl)
-  , Show (CacheType kc)
-  , Show (PermissionsType kp)
-  , Show (QosType kq) ) =>
-  Show (M2S_ReadAddress kb ksz lw iw aw kr kbl kl kc kp kq userType)
-
-deriving instance
-  ( C.NFDataX userType
-  , C.NFDataX (BurstType kb)
-  , C.NFDataX (SizeType ksz)
-  , C.NFDataX (BurstType kb)
-  , C.NFDataX userType
-  , C.NFDataX (RegionType kr)
-  , C.NFDataX (BurstLengthType kbl)
-  , C.NFDataX (LockType kl)
-  , C.NFDataX (CacheType kc)
-  , C.NFDataX (PermissionsType kp)
-  , C.NFDataX (QosType kq)
-  , C.KnownNat (Width iw)
-  , C.KnownNat (Width aw)
-  ) =>
-  C.NFDataX (M2S_ReadAddress kb ksz lw iw aw kr kbl kl kc kp kq userType)
-
--- | Circuit that transforms the LHS 'Axi4ReadAddress' protocol to a
--- version using different type parameters according to two functions
--- that can transform the data and ack signal to and from the other protocol.
-mapFull ::
-  forall dom
-    kb1 ksz1 lw1 iw1 aw1 kr1 kbl1 kl1 kc1 kp1 kq1 t1
-    kb2 ksz2 lw2 iw2 aw2 kr2 kbl2 kl2 kc2 kp2 kq2 t2 .
-  (M2S_ReadAddress kb1 ksz1 lw1 iw1 aw1 kr1 kbl1 kl1 kc1 kp1 kq1 t1 ->
-    M2S_ReadAddress kb2 ksz2 lw2 iw2 aw2 kr2 kbl2 kl2 kc2 kp2 kq2 t2) ->
-  (S2M_ReadAddress -> S2M_ReadAddress) ->
-  Circuit
-    (Axi4ReadAddress dom kb1 ksz1 lw1 iw1 aw1 kr1 kbl1 kl1 kc1 kp1 kq1 t1)
-    (Axi4ReadAddress dom kb2 ksz2 lw2 iw2 aw2 kr2 kbl2 kl2 kc2 kp2 kq2 t2)
-mapFull = DfLike.mapDfLike Proxy Proxy

@@ -7,133 +7,61 @@ Types and utilities shared between AXI4, AXI4-Lite, and AXI3.
 module Protocols.Axi4.Common where
 
 -- base
-import Data.Kind (Type)
 import GHC.Generics (Generic)
 import GHC.TypeNats (Nat)
 
 -- clash-prelude
 import qualified Clash.Prelude as C
-import Clash.Prelude (type (^), type (-), type (*))
+import Clash.Prelude (type (^), type (-))
 
 -- strict-tuple
 import Data.Tuple.Strict (T3, T4)
 
--- | Simple wrapper to achieve "named arguments" when instantiating an AXI protocol
-data IdWidth = IdWidth Nat
+import Protocols.Internal
 
--- | Simple wrapper to achieve "named arguments" when instantiating an AXI protocol
-data AddrWidth = AddrWidth Nat
-
--- | Simple wrapper to achieve "named arguments" when instantiating an AXI protocol
-data LengthWidth = LengthWidth Nat
-
--- | Simple wrapper to achieve "named arguments" when instantiating an AXI protocol
-data UserType = UserType Type KeepStrobe
-
--- | Keep or remove Burst, see 'BurstMode'
-data KeepBurst = KeepBurst | NoBurst
-
--- | Keep or remove Burst Length, see 'BurstSize'
-data KeepBurstLength = KeepBurstLength | NoBurstLength
-
--- | Keep or remove cache field, see 'Cache'
-data KeepCache = KeepCache | NoCache
-
--- | Keep or remove last field
-data KeepLast = KeepLast | NoLast
-
--- | Keep or remove lock, see 'AtomicAccess'
-data KeepLock = KeepLock | NoLock
-
--- | Keep or remove permissions, see 'Privileged', 'Secure', and
--- 'InstructionOrData'.
-data KeepPermissions = KeepPermissions | NoPermissions
-
--- | Keep or remove quality of service field. See 'Qos'.
-data KeepQos = KeepQos | NoQos
-
--- | Keep or remove region field
-data KeepRegion = KeepRegion | NoRegion
-
--- | Keep or remove response field. See 'Resp'.
-data KeepResponse = KeepResponse | NoResponse
-
--- | Keep or remove burst size field. See 'BurstSize'.
-data KeepSize = KeepSize | NoSize
-
--- | Keep or remove strobe field. See 'Strobe'
-data KeepStrobe = KeepStrobe | NoStrobe
-
+{-
+-- TODO what?
 -- | Type used to introduce strobe information on the term level
 data SKeepStrobe (strobeType :: KeepStrobe) where
   SKeepStrobe :: SKeepStrobe 'KeepStrobe
   SNoStrobe :: SKeepStrobe 'NoStrobe
-
--- | Extracts Nat from 'IdWidth', 'AddrWidth', and 'LengthWidth'
-type family Width (a :: k) :: Nat where
-  Width ('IdWidth n) = n
-  Width ('AddrWidth n) = n
-  Width ('LengthWidth n) = n
+-}
 
 -- | Enables or disables 'BurstMode'
-type family BurstType (keepBurst :: KeepBurst) where
-  BurstType 'KeepBurst = BurstMode
-  BurstType 'NoBurst = ()
+type BurstType (keep :: Bool) = KeepType keep BurstMode
 
 -- | Enables or disables burst length
-type family BurstLengthType (keepBurstLength :: KeepBurstLength) where
-  BurstLengthType 'KeepBurstLength = C.Index (2^8)
-  BurstLengthType 'NoBurstLength = ()
+type BurstLengthType (keep :: Bool) = KeepType keep (C.Index (2^8))
 
 -- | Enables or disables 'Cache'
-type family CacheType (keepCache :: KeepCache) where
-  CacheType 'KeepCache = Cache
-  CacheType 'NoCache = ()
+type CacheType (keep :: Bool) = KeepType keep Cache
 
 -- | Enables or disables a boolean indicating whether a transaction is done
-type family LastType (keepLast :: KeepLast) where
-  LastType 'KeepLast = Bool
-  LastType 'NoLast = ()
+type LastType (keep :: Bool) = KeepType keep Bool
 
 -- | Enables or disables 'AtomicAccess'
-type family LockType (keepLockType :: KeepLock) where
-  LockType 'KeepLock = AtomicAccess
-  LockType 'NoLock = ()
+type LockType (keep :: Bool) = KeepType keep AtomicAccess
 
 -- | Enables or disables 'Privileged', 'Secure', and 'InstructionOrData'
-type family PermissionsType (keepPermissions :: KeepPermissions) where
-  PermissionsType 'KeepPermissions = T3 Privileged Secure InstructionOrData
-  PermissionsType 'NoPermissions = ()
+type PermissionsType (keep :: Bool) = KeepType keep (T3 Privileged Secure InstructionOrData)
 
 -- | Enables or disables 'Qos'
-type family QosType (keepQos :: KeepQos) where
-  QosType 'KeepQos = Qos
-  QosType 'NoQos = ()
+type QosType (keep :: Bool) = KeepType keep Qos
 
 -- | Enables or disables region type
-type family RegionType (keepRegion :: KeepRegion) where
-  RegionType 'KeepRegion = C.BitVector 4
-  RegionType 'NoRegion = ()
+type RegionType (keep :: Bool) = KeepType keep (C.BitVector 4)
 
 -- | Enables or disables 'Resp'
-type family ResponseType (keepResponse :: KeepResponse) where
-  ResponseType 'KeepResponse = Resp
-  ResponseType 'NoResponse = ()
+type ResponseType (keep :: Bool) = KeepType keep Resp
 
 -- | Enables or disables 'BurstSize'
-type family SizeType (keepSize :: KeepSize) where
-  SizeType 'KeepSize = BurstSize
-  SizeType 'NoSize = ()
+type SizeType (keep :: Bool) = KeepType keep BurstSize
 
 -- | Enable or disable 'Strobe'
-type family StrobeType (byteSize :: Nat) (keepStrobe :: KeepStrobe) where
-  StrobeType byteSize 'KeepStrobe = Strobe byteSize
-  StrobeType byteSize 'NoStrobe = ()
+type StrobeType (byteSize :: Nat) (keep :: Bool) = KeepType keep (Strobe byteSize)
 
 -- | Enable or disable 'Strobe'
-type family StrictStrobeType (byteSize :: Nat) (keepStrobe :: KeepStrobe) where
-  StrictStrobeType byteSize 'KeepStrobe = C.Vec byteSize (Maybe (C.BitVector 8))
-  StrictStrobeType byteSize 'NoStrobe = C.BitVector (byteSize * 8)
+type StrictStrobeType (byteSize :: Nat) (keep :: Bool) = KeepType keep (C.Vec byteSize (Maybe (C.BitVector 8)))
 
 -- | Indicates valid bytes on data field.
 type Strobe (byteSize :: Nat) = C.BitVector byteSize

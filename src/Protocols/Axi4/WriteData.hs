@@ -13,15 +13,12 @@ to the AXI4 specification.
 module Protocols.Axi4.WriteData
   ( M2S_WriteData(..)
   , S2M_WriteData(..)
-  , Axi4WriteData
-  , mapFull
   ) where
 
 -- base
 import Data.Coerce (coerce)
 import Data.Kind (Type)
 import GHC.Generics (Generic)
-import GHC.TypeNats (Nat)
 import Data.Proxy
 import Prelude hiding
   ((!!), map, zip, zipWith, filter, fst, snd, either, const, pure)
@@ -35,29 +32,39 @@ import Protocols.Internal
 import Protocols.DfLike (DfLike)
 import qualified Protocols.DfLike as DfLike
 
+data Axi4WriteDataConfig = Axi4WriteDataConfig
+  { _wdKeepStrobe :: Bool
+  , _wdNBytes     :: C.Nat
+  }
+
+type family WDKeepStrobe (conf :: Axi4WriteDataConfig) where
+  WDKeepStrobe ('Axi4WriteDataConfig a _) = a
+
+type family WDNBytes (conf :: Axi4WriteDataConfig) where
+  WDNBytes ('Axi4WriteDataConfig _ a) = a
+
 -- | AXI4 Write Data channel protocol
 data Axi4WriteData
   (dom :: C.Domain)
-  (ks :: KeepStrobe)
-  (nBytes :: Nat)
+  (conf :: Axi4WriteDataConfig)
   (userType :: Type)
 
-instance Protocol (Axi4WriteData dom ks nBytes userType) where
-  type Fwd (Axi4WriteData dom ks nBytes userType) =
-    C.Signal dom (M2S_WriteData ks nBytes userType)
-  type Bwd (Axi4WriteData dom ks nBytes userType) =
+instance Protocol (Axi4WriteData dom conf userType) where
+  type Fwd (Axi4WriteData dom conf userType) =
+    C.Signal dom (M2S_WriteData conf userType)
+  type Bwd (Axi4WriteData dom conf userType) =
     C.Signal dom S2M_WriteData
 
-instance Backpressure (Axi4WriteData dom ks dataType userType) where
+instance Backpressure (Axi4WriteData dom conf userType) where
   boolsToBwd _ = C.fromList_lazy . coerce
 
-instance DfLike dom (Axi4WriteData dom ks dataType) userType where
-  type Data (Axi4WriteData dom ks dataType) userType =
-    M2S_WriteData ks dataType userType
+instance DfLike dom (Axi4WriteData dom conf) userType where
+  type Data (Axi4WriteData dom conf) userType =
+    M2S_WriteData conf userType
 
   type Payload userType = userType
 
-  type Ack (Axi4WriteData dom ks dataType) userType =
+  type Ack (Axi4WriteData dom conf) userType =
     S2M_WriteData
 
   getPayload _ (M2S_WriteData{_wuser}) = Just _wuser
@@ -78,15 +85,15 @@ instance DfLike dom (Axi4WriteData dom ks dataType) userType where
   {-# INLINE ackToBool #-}
 
 instance (C.KnownDomain dom, C.NFDataX userType, C.ShowX userType, Show userType) =>
-  Simulate (Axi4WriteData dom ks nBytes userType) where
+  Simulate (Axi4WriteData dom conf userType) where
 
-  type SimulateFwdType (Axi4WriteData dom ks nBytes userType) =
-    [M2S_WriteData ks nBytes userType]
+  type SimulateFwdType (Axi4WriteData dom conf userType) =
+    [M2S_WriteData conf userType]
 
-  type SimulateBwdType (Axi4WriteData dom ks nBytes userType) =
+  type SimulateBwdType (Axi4WriteData dom conf userType) =
     [S2M_WriteData]
 
-  type SimulateChannels (Axi4WriteData dom ks nBytes userType) = 1
+  type SimulateChannels (Axi4WriteData dom conf userType) = 1
 
   simToSigFwd Proxy = C.fromList_lazy
   simToSigBwd Proxy = C.fromList_lazy
@@ -100,13 +107,12 @@ instance (C.KnownDomain dom, C.NFDataX userType, C.ShowX userType, Show userType
 -- will be a vector of 'Maybe' bytes. If strobing is not kept, data will be a
 -- 'C.BitVector'.
 data M2S_WriteData
-  (ks :: KeepStrobe)
-  (nBytes :: Nat)
+  (conf :: Axi4WriteDataConfig)
   (userType :: Type)
   = M2S_NoWriteData
   | M2S_WriteData
     { -- | Write data
-      _wdata :: !(StrictStrobeType nBytes ks)
+      _wdata :: !(StrictStrobeType (WDNBytes conf) (WDKeepStrobe conf))
 
       -- | Write last
     , _wlast :: !Bool
@@ -119,24 +125,3 @@ data M2S_WriteData
 -- | See Table A2-3 "Write data channel signals"
 newtype S2M_WriteData = S2M_WriteData { _wready :: Bool }
   deriving (Show, Generic, C.NFDataX)
-
-deriving instance
-  ( C.NFDataX userType
-  , C.NFDataX (StrictStrobeType nBytes ks) ) =>
-  C.NFDataX (M2S_WriteData ks nBytes userType)
-
-deriving instance
-  ( Show userType
-  , Show (StrictStrobeType nBytes ks)
-  , C.KnownNat nBytes ) =>
-  Show (M2S_WriteData ks nBytes userType)
-
--- | Circuit that transforms the LHS 'Axi4WriteData' protocol to a
--- version using different type parameters according to two functions
--- that can transform the data and ack signal to and from the other protocol.
-mapFull ::
-  forall dom ks1 ks2 nBytes1 nBytes2 t1 t2.
-  (M2S_WriteData ks1 nBytes1 t1 -> M2S_WriteData ks2 nBytes2 t2) ->
-  (S2M_WriteData -> S2M_WriteData) ->
-  Circuit ((Axi4WriteData dom ks1 nBytes1) t1) ((Axi4WriteData dom ks2 nBytes2) t2)
-mapFull = DfLike.mapDfLike Proxy Proxy
