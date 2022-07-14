@@ -40,7 +40,7 @@ module Protocols.Df
   , bundleVec
   , unbundleVec
   , roundrobin
-  , DfLike.CollectMode(..)
+  , CollectMode(..)
   , roundrobinCollect
   , registerFwd
   , registerBwd
@@ -85,8 +85,6 @@ import qualified Clash.Explicit.Prelude as CE
 
 -- me
 import           Protocols.Internal
-import           Protocols.DfLike (DfLike)
-import qualified Protocols.DfLike as DfLike
 
 -- $setup
 -- >>> import Protocols
@@ -169,28 +167,6 @@ instance (C.KnownDomain dom, C.NFDataX a, C.ShowX a, Show a) => Drivable (Df dom
   driveC conf vals = drive conf (dataToMaybe <$> vals)
   sampleC conf ckt = maybeToData <$> sample conf ckt
 
-
-instance DfLike dom (Df dom) a where
-  type Data (Df dom) a = Data a
-  type Payload a = a
-  type Ack (Df dom) a = Ack
-
-  getPayload _ (Data a) = Just a
-  getPayload _ NoData = Nothing
-  {-# INLINE getPayload #-}
-
-  setPayload _ _ _ (Just b) = Data b
-  setPayload _ _ _ Nothing = NoData
-  {-# INLINE setPayload #-}
-
-  noData _ = NoData
-  {-# INLINE noData #-}
-
-  boolToAck _ = coerce
-  {-# INLINE boolToAck #-}
-
-  ackToBool _ = coerce
-  {-# INLINE ackToBool #-}
 
 -- | Force a /nack/ on the backward channel and /no data/ on the forward
 -- channel if reset is asserted.
@@ -576,14 +552,26 @@ roundrobin
     in
       (i1, (Ack ack, datOut1))
 
+-- | Collect mode in 'roundrobinCollect'
+data CollectMode
+  -- | Collect in a /roundrobin/ fashion. If a component does not produce
+  -- data, wait until it does.
+  = NoSkip
+  -- | Collect in a /roundrobin/ fashion. If a component does not produce
+  -- data, skip it and check the next component on the next cycle.
+  | Skip
+  -- | Check all components in parallel. Biased towards the /last/ Df
+  -- channel.
+  | Parallel
+
 -- | Opposite of 'roundrobin'. Useful to collect data from workers that only
 -- produce a result with an interval of /n/ cycles.
 roundrobinCollect ::
   forall n dom a .
   (C.KnownNat n, C.HiddenClockResetEnable dom, 1 <= n) =>
-  DfLike.CollectMode ->
+  CollectMode ->
   Circuit (C.Vec n (Df dom a)) (Df dom a)
-roundrobinCollect DfLike.NoSkip
+roundrobinCollect NoSkip
   = Circuit (B.first C.unbundle . C.mealyB go minBound . B.first C.bundle)
  where
   go (i :: C.Index n) (dats, Ack ack) =
@@ -595,7 +583,7 @@ roundrobinCollect DfLike.NoSkip
       NoData ->
         (i, (C.repeat (Ack False), NoData))
 
-roundrobinCollect DfLike.Skip
+roundrobinCollect Skip
   = Circuit (B.first C.unbundle . C.mealyB go minBound . B.first C.bundle)
  where
   go (i :: C.Index n) (dats, Ack ack) =
@@ -607,7 +595,7 @@ roundrobinCollect DfLike.Skip
       NoData ->
         (C.satSucc C.SatWrap i, (C.repeat (Ack False), NoData))
 
-roundrobinCollect DfLike.Parallel
+roundrobinCollect Parallel
   = Circuit (B.first C.unbundle . C.unbundle . fmap go . C.bundle . B.first C.bundle)
  where
   go (dats0, ack) = (acks, dat1)
