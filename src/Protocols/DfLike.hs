@@ -354,6 +354,116 @@ instance (NFDataX dat, NFDataX rdUser, KnownNat (Width aw), KnownNat (Width iw))
           put (a,b,S2M_NoReadData)
 
 
+-- Fifo classes for Axi4 master port
+
+instance (NFDataX wrUser, KnownNat wdBytes, KnownNat (Width aw), KnownNat (Width iw)) =>
+  DfLike
+    (Axi4WriteAddress dom 'KeepBurst waKeepSize lw iw aw waKeepRegion waKeepBurstLength waKeepLock waKeepCache waKeepPermissions waKeepQos waUser,
+     Axi4WriteData dom 'KeepStrobe wdBytes wdUser,
+     Reverse (Axi4WriteResponse dom 'KeepResponse iw wrUser))
+    where
+
+  type Dom
+    (Axi4WriteAddress dom 'KeepBurst waKeepSize lw iw aw waKeepRegion waKeepBurstLength waKeepLock waKeepCache waKeepPermissions waKeepQos waUser,
+     Axi4WriteData dom 'KeepStrobe wdBytes wdUser,
+     Reverse (Axi4WriteResponse dom 'KeepResponse iw wrUser))
+    = dom
+
+  type BwdPayload
+    (Axi4WriteAddress dom 'KeepBurst waKeepSize lw iw aw waKeepRegion waKeepBurstLength waKeepLock waKeepCache waKeepPermissions waKeepQos waUser,
+     Axi4WriteData dom 'KeepStrobe wdBytes wdUser,
+     Reverse (Axi4WriteResponse dom 'KeepResponse iw wrUser))
+    = ()
+
+  type FwdPayload
+    (Axi4WriteAddress dom 'KeepBurst waKeepSize lw iw aw waKeepRegion waKeepBurstLength waKeepLock waKeepCache waKeepPermissions waKeepQos waUser,
+     Axi4WriteData dom 'KeepStrobe wdBytes wdUser,
+     Reverse (Axi4WriteResponse dom 'KeepResponse iw wrUser))
+    = Vec wdBytes (Maybe (BitVector 8))
+
+  type DfLikeParam
+    (Axi4WriteAddress dom 'KeepBurst waKeepSize lw iw aw waKeepRegion waKeepBurstLength waKeepLock waKeepCache waKeepPermissions waKeepQos waUser,
+     Axi4WriteData dom 'KeepStrobe wdBytes wdUser,
+     Reverse (Axi4WriteResponse dom 'KeepResponse iw wrUser))
+    = ()
+
+  toDfCircuit (_, param) = toDfCircuitHelper s0 blankOtp (stateFn param) where
+    s0 = (False, False) -- address received, data received, response sent
+
+    blankOtp =
+      ( M2S_NoWriteAddress
+      , M2S_NoWriteData
+      , M2S_WriteResponse { _bready = False }
+      )
+
+    stateFn _ (addrAck, dataAck, respVal) _ otpItem = do
+      addrMsg <- sendAddr addrAck (isJust otpItem)
+      (dataMsg, sentData) <- sendData dataAck otpItem
+      respAck <- receiveResp respVal
+      P.pure ((addrMsg, dataMsg, respAck), Nothing, sentData)
+      where
+        sendAddr _ False = P.pure M2S_NoWriteAddress
+        sendAddr S2M_WriteAddress{_awready} True = do
+          (addrReceived, b) <- get
+          put (_awready || addrReceived, b)
+          P.pure $ if addrReceived then M2S_NoWriteAddress else M2S_WriteAddress
+            { _awlen = 1 -- TODO the rest
+            }
+        sendData _ Nothing = P.pure (M2S_NoWriteData, False)
+        sendData S2M_WriteData{_wready} (Just dat) = do
+          (addrReceived, dataReceived) <- get
+          put (addrReceived, _wready || dataReceived)
+          P.pure $ if (not addrReceived || dataReceived) then (M2S_NoWriteData, False) else (M2S_WriteData
+            { _wdata = dat -- TODO the rest
+            }, _wready)
+        receiveResp S2M_NoWriteResponse = P.pure $ M2S_WriteResponse { _bready = False }
+        receiveResp resp = do
+          (_, dataReceived) <- get
+          when dataReceived $ put (False, False)
+          P.pure (M2S_WriteResponse { _bready = dataReceived })
+
+instance (NFDataX dat, NFDataX rdUser, KnownNat (Width aw), KnownNat (Width iw)) =>
+  DfLike
+    (Axi4ReadAddress dom 'KeepBurst 'NoSize lw iw aw keepRegion 'KeepBurstLength keepLock keepCache keepPermissions keepQos raData,
+     Reverse (Axi4ReadData dom 'KeepResponse iw rdUser dat))
+    where
+
+  type Dom
+    (Axi4ReadAddress dom 'KeepBurst 'NoSize lw iw aw keepRegion 'KeepBurstLength keepLock keepCache keepPermissions keepQos raData,
+     Reverse (Axi4ReadData dom 'KeepResponse iw rdUser dat))
+     = dom
+  type BwdPayload
+    (Axi4ReadAddress dom 'KeepBurst 'NoSize lw iw aw keepRegion 'KeepBurstLength keepLock keepCache keepPermissions keepQos raData,
+     Reverse (Axi4ReadData dom 'KeepResponse iw rdUser dat))
+     = dat
+  type FwdPayload
+    (Axi4ReadAddress dom 'KeepBurst 'NoSize lw iw aw keepRegion 'KeepBurstLength keepLock keepCache keepPermissions keepQos raData,
+     Reverse (Axi4ReadData dom 'KeepResponse iw rdUser dat))
+     = ()
+  type DfLikeParam
+    (Axi4ReadAddress dom 'KeepBurst 'NoSize lw iw aw keepRegion 'KeepBurstLength keepLock keepCache keepPermissions keepQos raData,
+     Reverse (Axi4ReadData dom 'KeepResponse iw rdUser dat))
+    = ()
+
+  toDfCircuit (_, param) = toDfCircuitHelper s0 blankOtp (stateFn param) where
+    s0 = ()
+
+    blankOtp =
+      ( M2S_NoReadAddress
+      , M2S_ReadData { _rready = False }
+      )
+
+    stateFn _ (_, readVal) dfAck _
+      = P.pure ((addrVal, M2S_ReadData { _rready = dfAck }), processReadVal readVal, False)
+
+    addrVal = M2S_ReadAddress
+      { -- TODO
+      }
+
+    processReadVal S2M_NoReadData = Nothing
+    processReadVal S2M_ReadData{..} = Just _rdata
+
+
 -- | Convert 'DfLike' into a /one-way/ 'Df' port,
 -- at the data input end
 dfToDfLikeInp
