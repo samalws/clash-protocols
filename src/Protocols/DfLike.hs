@@ -140,6 +140,11 @@ class (Protocol df) => DfLike df where
     => (Proxy df, DfLikeParam df)
     -> Circuit (Df (Dom df) (FwdPayload df), Reverse (Df (Dom df) (BwdPayload df))) df
 
+  -- defaults
+  type BwdPayload df = ()
+  type FwdPayload df = ()
+  type DfLikeParam df = ()
+
 -- | 'toDfCircuit', but 'Df' is on the other side.
 -- 'BwdPayload' remains the input data,
 -- and 'FwdPayload' remains the output data.
@@ -194,26 +199,22 @@ toDfCircuitHelper s0 blankOtp stateFn
 instance (NFDataX dat) => DfLike (Reverse (Df dom dat)) where
   type Dom         (Reverse (Df dom dat)) = dom
   type BwdPayload  (Reverse (Df dom dat)) = dat
-  type FwdPayload  (Reverse (Df dom dat)) = ()
-  type DfLikeParam (Reverse (Df dom dat)) = ()
   toDfCircuit _ = Circuit (\((_, b), c) -> ((P.pure (Ack False), c), b))
 
 instance (NFDataX dat) => DfLike (Df dom dat) where
   type Dom         (Df dom dat) = dom
-  type BwdPayload  (Df dom dat) = ()
   type FwdPayload  (Df dom dat) = dat
-  type DfLikeParam (Df dom dat) = ()
   toDfCircuit _ = Circuit (\((a, _), c) -> ((c, P.pure NoData), a))
 
 
 -- Fifo classes for Axi4 slave port
 
 -- Does not support burst modes other than fixed.
--- Always sends 'ROkay' along 'WriteResponse' channel
 instance
   ( GoodAxi4WriteAddressConfig confAW
   , GoodAxi4WriteDataConfig confW
   , GoodAxi4WriteResponseConfig confB
+  , NFDataX userAW
   , NFDataX userB
   , AWIdWidth confAW ~ BIdWidth confB ) =>
   DfLike
@@ -231,64 +232,60 @@ instance
     (Reverse (Axi4WriteAddress dom confAW userAW),
      Reverse (Axi4WriteData dom confW userW),
      Axi4WriteResponse dom confB userB)
-    = StrictStrobeType (WNBytes confW) (WKeepStrobe confW)
+    = (userAW, BitVector (AWAddrWidth confAW), StrictStrobeType (WNBytes confW) (WKeepStrobe confW), userW)
   type FwdPayload
     (Reverse (Axi4WriteAddress dom confAW userAW),
      Reverse (Axi4WriteData dom confW userW),
      Axi4WriteResponse dom confB userB)
-    = ()
-  type DfLikeParam
-    (Reverse (Axi4WriteAddress dom confAW userAW),
-     Reverse (Axi4WriteData dom confW userW),
-     Axi4WriteResponse dom confB userB)
-    = (BitVector (AWAddrWidth confAW), userB)
-    -- write data address, user data for write response
+    = Maybe (ResponseType (BKeepResponse confB), userB)
 
-  toDfCircuit (_, param) = toDfCircuitHelper s0 blankOtp (stateFn param) where
-    s0 = (Nothing, S2M_NoWriteResponse)
+  toDfCircuit _ = toDfCircuitHelper s0 blankOtp stateFn where
+    s0 = (Nothing, Nothing)
 
     blankOtp = ( S2M_WriteAddress{_awready = False}
                , S2M_WriteData{_wready = False}
                , S2M_NoWriteResponse)
 
-    stateFn (dataAddr,userB) (wAddrVal, wDataVal, wRespAck) ack _ = do
+    stateFn (wAddrVal, wDataVal, wRespAck) ack wRespItem = do
       wAddrAck <- processWAddr wAddrVal
       (wDataAck, inpItem) <- processWData wDataVal
-      wRespVal <- gets P.snd
-      processWRespAck
-      P.pure ((wAddrAck, wDataAck, wRespVal), inpItem, False)
+      wRespVal <- sendWResp
+      P.pure ((wAddrAck, wDataAck, wRespVal), inpItem, _bready wRespAck)
       where
 
       processWAddr M2S_NoWriteAddress = P.pure (S2M_WriteAddress{_awready = False})
-      processWAddr M2S_WriteAddress{ _awburst, _awaddr, _awid }
+      processWAddr M2S_WriteAddress{ _awburst, _awaddr, _awid, _awuser }
         | maybe True (/= BmFixed) (fromKeepType _awburst) = P.pure (S2M_WriteAddress{_awready = True})
         | otherwise = do
            (_,b) <- get
-           put (if _awaddr == dataAddr then Just _awid else Nothing, b)
+           put (Just (_awid, _awuser, _awaddr), b)
            P.pure (S2M_WriteAddress{_awready = True})
 
       processWData M2S_NoWriteData = P.pure (S2M_WriteData{_wready = False}, Nothing)
-      processWData M2S_WriteData{_wlast, _wdata} = do
-        (shouldRead,respS2M) <- get
+      processWData M2S_WriteData{_wlast, _wdata, _wuser} = do
+        (writingID,respID) <- get
         -- we only want to output _wready = false
         --   if we're the recpient of the writes AND ack is false
         -- we only want to return data if we're the recpient of the writes
         -- we only want to output on writeresponse
         --   if we're the recipient of the writes AND ack is true
-        case (shouldRead, ack) of
+        case (writingID, ack) of
           (Nothing, _) -> P.pure (S2M_WriteData{_wready = True}, Nothing)
-          (Just _, False) -> P.pure (S2M_WriteData{_wready = False}, Just _wdata)
-          (Just sr, True) -> do
+          (Just (_, awuser, awaddr), False) -> P.pure (S2M_WriteData{_wready = False}, Just (awuser, awaddr, _wdata, _wuser))
+          (Just (awid, awuser, awaddr), True) -> do
             put (Nothing,
                  if _wlast
-                 then S2M_WriteResponse {_bid = sr, _bresp = toKeepType ROkay, _buser = userB }
-                 else respS2M)
-            P.pure (S2M_WriteData{_wready = True}, Just _wdata)
+                 then Just awid
+                 else respID)
+            P.pure (S2M_WriteData{_wready = True}, Just (awuser, awaddr, _wdata, _wuser))
 
-      processWRespAck = when (_bready wRespAck) $
-                        modify (\(a, _) -> (a, S2M_NoWriteResponse))
+      sendWResp = do
+        respID <- gets P.snd
+        when (_bready wRespAck || isJust wRespItem) $ modify (\(a, _) -> (a, Nothing))
+        P.pure $ case (respID, wRespItem) of
+          (Just _bid, Just (Just (_bresp, _buser))) -> S2M_WriteResponse{..}
+          _ -> S2M_NoWriteResponse
 
--- Always sends 'ROkay' along 'WriteResponse' channel
 instance
   ( GoodAxi4ReadAddressConfig confAR
   , GoodAxi4ReadDataConfig confR
@@ -296,29 +293,24 @@ instance
   , NFDataX dat
   , ARIdWidth confAR ~ RIdWidth confR ) =>
   DfLike
-    (Reverse (Axi4ReadAddress dom confAR raUser),
+    (Reverse (Axi4ReadAddress dom confAR userAR),
      Axi4ReadData dom confR userR dat)
     where
 
   type Dom
-    (Reverse (Axi4ReadAddress dom confAR raUser),
+    (Reverse (Axi4ReadAddress dom confAR userAR),
      Axi4ReadData dom confR userR dat)
      = dom
   type BwdPayload
-    (Reverse (Axi4ReadAddress dom confAR raUser),
+    (Reverse (Axi4ReadAddress dom confAR userAR),
      Axi4ReadData dom confR userR dat)
-     = ()
+     = (BitVector (ARAddrWidth confAR), userAR)
   type FwdPayload
-    (Reverse (Axi4ReadAddress dom confAR raUser),
+    (Reverse (Axi4ReadAddress dom confAR userAR),
      Axi4ReadData dom confR userR dat)
-     = dat
-  type DfLikeParam
-    (Reverse (Axi4ReadAddress dom confAR raUser),
-     Axi4ReadData dom confR userR dat)
-    = (BitVector (ARAddrWidth confAR), userR)
-    -- data address, user responses
+     = (dat, userR, ResponseType (RKeepResponse confR))
 
-  toDfCircuit (_, param) = toDfCircuitHelper s0 blankOtp (stateFn param) where
+  toDfCircuit _ = toDfCircuitHelper s0 blankOtp stateFn where
     s0 =
       (0,
        errorX "DfLike for Axi4: No initial value for read id",
@@ -326,31 +318,29 @@ instance
 
     blankOtp = (S2M_ReadAddress { _arready = False }, S2M_NoReadData)
 
-    stateFn (dataAddr,usr) (addrVal, dataAck) _ otpItem = do
-      addrAck <- processAddr addrVal
+    stateFn (addrVal, dataAck) dfAddrAck otpItem = do -- TODO really need a naming convention here
+      (addrAck, dfAddr) <- processAddr addrVal
       (dataVal,sentData) <- sendData
       processDataAck dataAck
-      P.pure ((addrAck,dataVal),Nothing,sentData)
+      P.pure ((addrAck,dataVal),dfAddr,sentData)
       where
-        processAddr M2S_NoReadAddress = P.pure (S2M_ReadAddress { _arready = False })
-        processAddr M2S_ReadAddress{_arburst,_araddr,_arlen,_arid}
-          | maybe True (/= BmFixed) (fromKeepType _arburst) = P.pure (S2M_ReadAddress{ _arready = True })
+        processAddr M2S_NoReadAddress = P.pure (S2M_ReadAddress { _arready = False }, Nothing)
+        processAddr M2S_ReadAddress{_arburst,_araddr,_arlen,_arid,_aruser}
+          | maybe True (/= BmFixed) (fromKeepType _arburst) = P.pure (S2M_ReadAddress{ _arready = True }, Nothing)
           | otherwise = do
               (burstLenLeft,_,c) <- get
-              when (burstLenLeft == 0 && (_araddr == dataAddr)) $ put (fromMaybe 1 (fromKeepType _arlen), _arid, c)
-              P.pure (S2M_ReadAddress{ _arready = burstLenLeft == 0 })
+              when (burstLenLeft == 0) $ put (fromMaybe 1 (fromKeepType _arlen), _arid, c)
+              P.pure (S2M_ReadAddress{ _arready = burstLenLeft == 0 && dfAddrAck }, Just (_araddr, _aruser))
 
         sendData = do
           (burstLenLeft,readId,currOtp) <- get
           sentData <- case (currOtp, burstLenLeft == 0, otpItem) of
-            (S2M_NoReadData, False, Just oi) -> do
+            (S2M_NoReadData, False, Just (_rdata, _ruser, _rresp)) -> do
               put (burstLenLeft-1, readId,
                 S2M_ReadData
                   { _rid = readId
-                  , _rdata = oi
-                  , _rresp = toKeepType ROkay
                   , _rlast = burstLenLeft == 1
-                  , _ruser = usr })
+                  , _rdata, _ruser, _rresp })
               P.pure True
             _ -> P.pure False
           (_,_,currOtp') <- get
@@ -379,26 +369,14 @@ instance
      Reverse (Axi4WriteResponse dom confB userB))
     = dom
 
-  type BwdPayload
-    (Axi4WriteAddress dom confAW userAW,
-     Axi4WriteData dom confW userW,
-     Reverse (Axi4WriteResponse dom confB userB))
-    = ()
-
   type FwdPayload
     (Axi4WriteAddress dom confAW userAW,
      Axi4WriteData dom confW userW,
      Reverse (Axi4WriteResponse dom confB userB))
     = StrictStrobeType (WNBytes confW) (WKeepStrobe confW)
 
-  type DfLikeParam
-    (Axi4WriteAddress dom confAW userAW,
-     Axi4WriteData dom confW userW,
-     Reverse (Axi4WriteResponse dom confB userB))
-    = ()
-
   toDfCircuit (_, param) = toDfCircuitHelper s0 blankOtp (stateFn param) where
-    s0 = (False, False) -- address received, data received, response sent
+    s0 = (False, False) -- address received, data received
 
     blankOtp =
       ( M2S_NoWriteAddress
@@ -460,14 +438,6 @@ instance
     (Axi4ReadAddress dom confAR dataAR,
      Reverse (Axi4ReadData dom confR userR dat))
      = dat
-  type FwdPayload
-    (Axi4ReadAddress dom confAR dataAR,
-     Reverse (Axi4ReadData dom confR userR dat))
-     = ()
-  type DfLikeParam
-    (Axi4ReadAddress dom confAR dataAR,
-     Reverse (Axi4ReadData dom confR userR dat))
-    = ()
 
   toDfCircuit (_, param) = toDfCircuitHelper s0 blankOtp (stateFn param) where
     s0 = ()
