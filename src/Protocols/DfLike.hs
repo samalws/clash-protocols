@@ -145,6 +145,52 @@ class (Protocol df) => DfLike df where
   type FwdPayload df = ()
   type DfLikeParam df = ()
 
+-- | Class for protocols whose 'DfLike' implementation contains
+-- a lot of info (e.g. addresses, user channels) that typically isn't needed.
+-- Using 'ImplicitInfo' we can put in default values for extraneous info
+-- and only deal with the important data (see 'ImplicitInfo' and instances below).
+class (DfLike df) => ImplicitInfoClass df where
+  -- | The "important" parts of @FwdPayload df@
+  type ImplicitInfoFwdPayload df
+  -- | The "important" parts of @BwdPayload df@
+  type ImplicitInfoBwdPayload df
+  -- | Parameter given to 'mapFwd', typically a bunch of default values.
+  type ImplicitInfoFwdParam df
+  -- | Add on "unimportant" default values to 'ImplicitInfoFwdPayload' to get 'FwdPayload'
+  mapFwd :: (Proxy df, ImplicitInfoFwdParam df) -> ImplicitInfoFwdPayload df -> FwdPayload df
+  -- | Remove "unimportant" default values from 'BwdPayload' to get 'ImplicitInfoBwdPayload'
+  mapBwd :: Proxy df -> BwdPayload df -> ImplicitInfoBwdPayload df
+
+  -- defaults
+  type ImplicitInfoFwdPayload df = ()
+  type ImplicitInfoBwdPayload df = ()
+  type ImplicitInfoFwdParam df = ()
+
+-- | Wrapper for protocols whose DfLike implementation contains
+-- a lot of info that typically isn't needed.
+-- See 'ImplicitInfoClass' and instances.
+data ImplicitInfo (t :: Type) = ImplicitInfo
+
+-- The same data is passed forwards and backwards,
+-- but we interpret it differently in 'DfLike'.
+instance (Protocol df) => Protocol (ImplicitInfo df) where
+  type Fwd (ImplicitInfo df) = Fwd df
+  type Bwd (ImplicitInfo df) = Bwd df
+
+-- The important part to note here is 'FwdPayload' and 'BwdPayload'.
+instance (ImplicitInfoClass df) => DfLike (ImplicitInfo df) where
+  type Dom (ImplicitInfo df) = Dom df
+  type FwdPayload (ImplicitInfo df) = ImplicitInfoFwdPayload df
+  type BwdPayload (ImplicitInfo df) = ImplicitInfoBwdPayload df
+  type DfLikeParam (ImplicitInfo df) = (ImplicitInfoFwdParam df, DfLikeParam df)
+  toDfCircuit (_, (fwdParam, dfParam)) =
+    let pxy = Proxy :: Proxy df
+    in  coerceCircuit -- we have Circuit (...) df but want Circuit (...) (ImplicitInfo df), which has same 'Fwd' and 'Bwd'
+    $   tupCircuits
+        (Df.map $ mapFwd (pxy, fwdParam))
+        (reverseCircuit $ Df.map $ mapBwd pxy)
+    |>  toDfCircuit (pxy, dfParam)
+
 -- | 'toDfCircuit', but 'Df' is on the other side.
 -- 'BwdPayload' remains the input data,
 -- and 'FwdPayload' remains the output data.
@@ -207,7 +253,151 @@ instance (NFDataX dat) => DfLike (Df dom dat) where
   toDfCircuit _ = Circuit (\((a, _), c) -> ((c, P.pure NoData), a))
 
 
--- Fifo classes for Axi4 slave port
+-- Fifo classes for Axi4 subordinate port
+
+data Axi4WriteAddressInfo (conf :: Axi4WriteAddressConfig) (userType :: Type)
+  = Axi4WriteAddressInfo
+  { -- | Id
+    _awiid :: !(BitVector (AWIdWidth conf))
+
+    -- | Address
+  , _awiaddr :: !(BitVector (AWAddrWidth conf))
+
+    -- | Region
+  , _awiregion :: !(RegionType (AWKeepRegion conf))
+
+    -- | Lock type
+  , _awilock :: !(LockType (AWKeepLock conf))
+
+    -- | Cache type
+  , _awicache :: !(CacheType (AWKeepCache conf))
+
+    -- | Protection type
+  , _awiprot :: !(PermissionsType (AWKeepPermissions conf))
+
+    -- | QoS value
+  , _awiqos :: !(QosType (AWKeepQos conf))
+
+    -- | User data
+  , _awiuser :: !userType
+  }
+  deriving (Generic)
+
+deriving instance
+  ( GoodAxi4WriteAddressConfig conf
+  , Show userType ) =>
+  Show (Axi4WriteAddressInfo conf userType)
+
+deriving instance
+  ( GoodAxi4WriteAddressConfig conf
+  , NFDataX userType ) =>
+  NFDataX (Axi4WriteAddressInfo conf userType)
+
+axi4WriteAddrMsgToWriteAddrInfo :: M2S_WriteAddress conf userType -> Axi4WriteAddressInfo conf userType
+axi4WriteAddrMsgToWriteAddrInfo M2S_NoWriteAddress = errorX "Expected WriteAddress"
+axi4WriteAddrMsgToWriteAddrInfo M2S_WriteAddress{..}
+  = Axi4WriteAddressInfo
+  { _awiid = _awid
+  , _awiaddr = _awaddr
+  , _awiregion = _awregion
+  , _awilock = _awlock
+  , _awicache = _awcache
+  , _awiprot = _awprot
+  , _awiqos = _awqos
+  , _awiuser = _awuser
+  }
+
+axi4WriteAddrMsgFromWriteAddrInfo
+  :: BurstLengthType (AWKeepBurstLength conf)
+  -> SizeType (AWKeepSize conf)
+  -> BurstType (AWKeepBurst conf)
+  -> Axi4WriteAddressInfo conf userType
+  -> M2S_WriteAddress conf userType
+axi4WriteAddrMsgFromWriteAddrInfo _awlen _awsize _awburst Axi4WriteAddressInfo{..}
+  = M2S_WriteAddress
+  { _awid = _awiid
+  , _awaddr = _awiaddr
+  , _awregion = _awiregion
+  , _awlock = _awilock
+  , _awcache = _awicache
+  , _awprot = _awiprot
+  , _awqos = _awiqos
+  , _awuser = _awiuser
+  , _awlen, _awsize, _awburst
+  }
+
+
+data Axi4ReadAddressInfo (conf :: Axi4ReadAddressConfig) (userType :: Type)
+  = Axi4ReadAddressInfo
+  { -- | Id
+    _ariid :: !(BitVector (ARIdWidth conf))
+
+    -- | Address
+  , _ariaddr :: !(BitVector (ARAddrWidth conf))
+
+    -- | Region
+  , _ariregion :: !(RegionType (ARKeepRegion conf))
+
+    -- | Lock type
+  , _arilock :: !(LockType (ARKeepLock conf))
+
+    -- | Cache type
+  , _aricache :: !(CacheType (ARKeepCache conf))
+
+    -- | Protection type
+  , _ariprot :: !(PermissionsType (ARKeepPermissions conf))
+
+    -- | QoS value
+  , _ariqos :: !(QosType (ARKeepQos conf))
+
+    -- | User data
+  , _ariuser :: !userType
+  }
+  deriving (Generic)
+
+deriving instance
+  ( GoodAxi4ReadAddressConfig conf
+  , Show userType ) =>
+  Show (Axi4ReadAddressInfo conf userType)
+
+deriving instance
+  ( GoodAxi4ReadAddressConfig conf
+  , NFDataX userType ) =>
+  NFDataX (Axi4ReadAddressInfo conf userType)
+
+axi4ReadAddrMsgToReadAddrInfo :: M2S_ReadAddress conf userType -> Axi4ReadAddressInfo conf userType
+axi4ReadAddrMsgToReadAddrInfo M2S_NoReadAddress = errorX "Expected ReadAddress"
+axi4ReadAddrMsgToReadAddrInfo M2S_ReadAddress{..}
+  = Axi4ReadAddressInfo
+  { _ariid = _arid
+  , _ariaddr = _araddr
+  , _ariregion = _arregion
+  , _arilock = _arlock
+  , _aricache = _arcache
+  , _ariprot = _arprot
+  , _ariqos = _arqos
+  , _ariuser = _aruser
+  }
+
+axi4ReadAddrMsgFromReadAddrInfo
+  :: BurstLengthType (ARKeepBurstLength conf)
+  -> SizeType (ARKeepSize conf)
+  -> BurstType (ARKeepBurst conf)
+  -> Axi4ReadAddressInfo conf userType
+  -> M2S_ReadAddress conf userType
+axi4ReadAddrMsgFromReadAddrInfo _arlen _arsize _arburst Axi4ReadAddressInfo{..}
+  = M2S_ReadAddress
+  { _arid = _ariid
+  , _araddr = _ariaddr
+  , _arregion = _ariregion
+  , _arlock = _arilock
+  , _arcache = _aricache
+  , _arprot = _ariprot
+  , _arqos = _ariqos
+  , _aruser = _ariuser
+  , _arlen, _arsize, _arburst
+  }
+
 
 -- Does not support burst modes other than fixed.
 instance
@@ -232,7 +422,7 @@ instance
     (Reverse (Axi4WriteAddress dom confAW userAW),
      Reverse (Axi4WriteData dom confW userW),
      Axi4WriteResponse dom confB userB)
-    = (userAW, BitVector (AWAddrWidth confAW), StrictStrobeType (WNBytes confW) (WKeepStrobe confW), userW)
+    = (Axi4WriteAddressInfo confAW userAW, StrictStrobeType (WNBytes confW) (WKeepStrobe confW), userW)
   type FwdPayload
     (Reverse (Axi4WriteAddress dom confAW userAW),
      Reverse (Axi4WriteData dom confW userW),
@@ -254,11 +444,11 @@ instance
       where
 
       processWAddr M2S_NoWriteAddress = P.pure (S2M_WriteAddress{_awready = False})
-      processWAddr M2S_WriteAddress{ _awburst, _awaddr, _awid, _awuser }
-        | maybe True (/= BmFixed) (fromKeepType _awburst) = P.pure (S2M_WriteAddress{_awready = True})
+      processWAddr msg
+        | maybe True (/= BmFixed) (fromKeepType $ _awburst msg) = P.pure (S2M_WriteAddress{_awready = True})
         | otherwise = do
            (_,b) <- get
-           put (Just (_awid, _awuser, _awaddr), b)
+           put (Just (axi4WriteAddrMsgToWriteAddrInfo msg), b)
            P.pure (S2M_WriteAddress{_awready = True})
 
       processWData M2S_NoWriteData = P.pure (S2M_WriteData{_wready = False}, Nothing)
@@ -271,13 +461,13 @@ instance
         --   if we're the recipient of the writes AND ack is true
         case (writingID, ack) of
           (Nothing, _) -> P.pure (S2M_WriteData{_wready = True}, Nothing)
-          (Just (_, awuser, awaddr), False) -> P.pure (S2M_WriteData{_wready = False}, Just (awuser, awaddr, _wdata, _wuser))
-          (Just (awid, awuser, awaddr), True) -> do
+          (Just info, False) -> P.pure (S2M_WriteData{_wready = False}, Just (info, _wdata, _wuser))
+          (Just info, True) -> do
             put (Nothing,
                  if _wlast
-                 then Just awid
+                 then Just (_awiid info)
                  else respID)
-            P.pure (S2M_WriteData{_wready = True}, Just (awuser, awaddr, _wdata, _wuser))
+            P.pure (S2M_WriteData{_wready = True}, Just (info, _wdata, _wuser))
 
       sendWResp = do
         respID <- gets P.snd
@@ -285,6 +475,34 @@ instance
         P.pure $ case (respID, wRespItem) of
           (Just _bid, Just (Just (_bresp, _buser))) -> S2M_WriteResponse{..}
           _ -> S2M_NoWriteResponse
+
+instance
+  ( GoodAxi4WriteAddressConfig confAW
+  , GoodAxi4WriteDataConfig confW
+  , GoodAxi4WriteResponseConfig confB
+  , NFDataX userAW
+  , NFDataX userB
+  , AWIdWidth confAW ~ BIdWidth confB ) =>
+  ImplicitInfoClass
+    (Reverse (Axi4WriteAddress dom confAW userAW),
+     Reverse (Axi4WriteData dom confW userW),
+     Axi4WriteResponse dom confB userB)
+    where
+
+  type ImplicitInfoBwdPayload
+    (Reverse (Axi4WriteAddress dom confAW userAW),
+     Reverse (Axi4WriteData dom confW userW),
+     Axi4WriteResponse dom confB userB)
+    = StrictStrobeType (WNBytes confW) (WKeepStrobe confW)
+
+  type ImplicitInfoFwdParam
+    (Reverse (Axi4WriteAddress dom confAW userAW),
+     Reverse (Axi4WriteData dom confW userW),
+     Axi4WriteResponse dom confB userB)
+    = Maybe (ResponseType (BKeepResponse confB), userB)
+
+  mapFwd (_, a) () = a
+  mapBwd _ (_, a, _) = a
 
 instance
   ( GoodAxi4ReadAddressConfig confAR
@@ -304,7 +522,7 @@ instance
   type BwdPayload
     (Reverse (Axi4ReadAddress dom confAR userAR),
      Axi4ReadData dom confR userR dat)
-     = (BitVector (ARAddrWidth confAR), userAR)
+     = Axi4ReadAddressInfo confAR userAR
   type FwdPayload
     (Reverse (Axi4ReadAddress dom confAR userAR),
      Axi4ReadData dom confR userR dat)
@@ -325,12 +543,12 @@ instance
       P.pure ((addrAck,dataVal),dfAddr,sentData)
       where
         processAddr M2S_NoReadAddress = P.pure (S2M_ReadAddress { _arready = False }, Nothing)
-        processAddr M2S_ReadAddress{_arburst,_araddr,_arlen,_arid,_aruser}
-          | maybe True (/= BmFixed) (fromKeepType _arburst) = P.pure (S2M_ReadAddress{ _arready = True }, Nothing)
+        processAddr msg
+          | maybe True (/= BmFixed) (fromKeepType $ _arburst msg) = P.pure (S2M_ReadAddress{ _arready = True }, Nothing)
           | otherwise = do
               (burstLenLeft,_,c) <- get
-              when (burstLenLeft == 0) $ put (fromMaybe 1 (fromKeepType _arlen), _arid, c)
-              P.pure (S2M_ReadAddress{ _arready = burstLenLeft == 0 && dfAddrAck }, Just (_araddr, _aruser))
+              when (burstLenLeft == 0) $ put (fromMaybe 1 (fromKeepType $ _arlen msg), _arid msg, c)
+              P.pure (S2M_ReadAddress{ _arready = burstLenLeft == 0 && dfAddrAck }, Just (axi4ReadAddrMsgToReadAddrInfo msg))
 
         sendData = do
           (burstLenLeft,readId,currOtp) <- get
@@ -350,8 +568,32 @@ instance
           (a,b,_) <- get
           put (a,b,S2M_NoReadData)
 
+instance
+  ( GoodAxi4ReadAddressConfig confAR
+  , GoodAxi4ReadDataConfig confR
+  , NFDataX userR
+  , NFDataX dat
+  , ARIdWidth confAR ~ RIdWidth confR ) =>
+  ImplicitInfoClass
+    (Reverse (Axi4ReadAddress dom confAR userAR),
+     Axi4ReadData dom confR userR dat)
+    where
 
--- Fifo classes for Axi4 master port
+  type ImplicitInfoFwdPayload
+    (Reverse (Axi4ReadAddress dom confAR userAR),
+     Axi4ReadData dom confR userR dat)
+     = dat
+
+  type ImplicitInfoFwdParam
+    (Reverse (Axi4ReadAddress dom confAR userAR),
+     Axi4ReadData dom confR userR dat)
+     = (userR, ResponseType (RKeepResponse confR))
+
+  mapFwd (_, (b, c)) a = (a, b, c)
+  mapBwd _ _ = ()
+
+
+-- Fifo classes for Axi4 manager port
 
 instance
   ( GoodAxi4WriteAddressConfig confAW
@@ -373,7 +615,13 @@ instance
     (Axi4WriteAddress dom confAW userAW,
      Axi4WriteData dom confW userW,
      Reverse (Axi4WriteResponse dom confB userB))
-    = StrictStrobeType (WNBytes confW) (WKeepStrobe confW)
+    = (Axi4WriteAddressInfo confAW userAW, StrictStrobeType (WNBytes confW) (WKeepStrobe confW), userW)
+
+  type BwdPayload
+    (Axi4WriteAddress dom confAW userAW,
+     Axi4WriteData dom confW userW,
+     Reverse (Axi4WriteResponse dom confB userB))
+    = (ResponseType (BKeepResponse confB), userB)
 
   toDfCircuit (_, param) = toDfCircuitHelper s0 blankOtp (stateFn param) where
     s0 = (False, False) -- address received, data received
@@ -384,43 +632,60 @@ instance
       , M2S_WriteResponse { _bready = False }
       )
 
-    stateFn _ (addrAck, dataAck, respVal) _ otpItem = do
-      addrMsg <- sendAddr addrAck (isJust otpItem)
+    stateFn _ (addrAck, dataAck, respVal) dfRespAck otpItem = do
+      addrMsg <- sendAddr addrAck otpItem
       (dataMsg, sentData) <- sendData dataAck otpItem
-      respAck <- receiveResp respVal
-      P.pure ((addrMsg, dataMsg, respAck), Nothing, sentData)
-      where
-        sendAddr _ False = P.pure M2S_NoWriteAddress
-        sendAddr S2M_WriteAddress{_awready} True = do
+      (respAck, dfRespDat) <- receiveResp respVal
+      P.pure ((addrMsg, dataMsg, respAck), dfRespDat, sentData)
+      where -- TODO why the nested wheres?
+        sendAddr _ Nothing = P.pure M2S_NoWriteAddress
+        sendAddr S2M_WriteAddress{_awready} (Just (info, _, _)) = do
           (addrReceived, b) <- get
           put (_awready || addrReceived, b)
-          P.pure $ if addrReceived then M2S_NoWriteAddress else M2S_WriteAddress
-            { _awid = 0 -- TODO
-            , _awaddr = errorX "no address" -- TODO
-            , _awregion = errorX "no reason" -- TODO what's a region?
-            , _awlen = toKeepType 1
-            , _awsize = toKeepType Bs1
-            , _awburst = toKeepType BmFixed
-            , _awlock = toKeepType NonExclusiveAccess -- TODO
-            , _awcache = errorX "no cache" -- TODO
-            , _awprot = errorX "no prot" -- TODO
-            , _awqos = toKeepType 0 -- kinda TODO
-            , _awuser = errorX "no user data" -- TODO
-            }
+          P.pure $ if addrReceived then M2S_NoWriteAddress
+                   else axi4WriteAddrMsgFromWriteAddrInfo (toKeepType 1) (toKeepType Bs1) (toKeepType BmFixed) info
+
         sendData _ Nothing = P.pure (M2S_NoWriteData, False)
-        sendData S2M_WriteData{_wready} (Just dat) = do
+        sendData S2M_WriteData{_wready} (Just (_, dat, user)) = do
           (addrReceived, dataReceived) <- get
           put (addrReceived, _wready || dataReceived)
           P.pure $ if (not addrReceived || dataReceived) then (M2S_NoWriteData, False) else (M2S_WriteData
             { _wdata = dat
             , _wlast = True
-            , _wuser = errorX "no user data" -- TODO
+            , _wuser = user
             }, _wready)
-        receiveResp S2M_NoWriteResponse = P.pure $ M2S_WriteResponse { _bready = False }
-        receiveResp _ = do
+
+        receiveResp S2M_NoWriteResponse = P.pure (M2S_WriteResponse { _bready = False }, Nothing)
+        receiveResp S2M_WriteResponse{_bresp,_buser} = do
           (_, dataReceived) <- get
-          when dataReceived $ put (False, False)
-          P.pure (M2S_WriteResponse { _bready = dataReceived })
+          let shouldAckResponse = dataReceived && dfRespAck
+          when shouldAckResponse $ put (False, False)
+          P.pure (M2S_WriteResponse { _bready = shouldAckResponse }, Just (_bresp,_buser))
+
+instance
+  ( GoodAxi4WriteAddressConfig confAW
+  , GoodAxi4WriteDataConfig confW
+  , GoodAxi4WriteResponseConfig confB ) =>
+  ImplicitInfoClass
+    (Axi4WriteAddress dom confAW userAW,
+     Axi4WriteData dom confW userW,
+     Reverse (Axi4WriteResponse dom confB userB))
+    where
+
+  type ImplicitInfoFwdPayload
+    (Axi4WriteAddress dom confAW userAW,
+     Axi4WriteData dom confW userW,
+     Reverse (Axi4WriteResponse dom confB userB))
+    = StrictStrobeType (WNBytes confW) (WKeepStrobe confW)
+
+  type ImplicitInfoFwdParam
+    (Axi4WriteAddress dom confAW userAW,
+     Axi4WriteData dom confW userW,
+     Reverse (Axi4WriteResponse dom confB userB))
+    = (Axi4WriteAddressInfo confAW userAW, userW)
+
+  mapFwd (_, (a, c)) b = (a, b, c)
+  mapBwd _ _ = ()
 
 instance
   ( GoodAxi4ReadAddressConfig confAR
@@ -434,10 +699,16 @@ instance
     (Axi4ReadAddress dom confAR dataAR,
      Reverse (Axi4ReadData dom confR userR dat))
      = dom
+
   type BwdPayload
     (Axi4ReadAddress dom confAR dataAR,
      Reverse (Axi4ReadData dom confR userR dat))
-     = dat
+     = (dat, userR)
+
+  type FwdPayload
+    (Axi4ReadAddress dom confAR dataAR,
+     Reverse (Axi4ReadData dom confR userR dat))
+     = Axi4ReadAddressInfo confAR dataAR
 
   toDfCircuit (_, param) = toDfCircuitHelper s0 blankOtp (stateFn param) where
     s0 = ()
@@ -447,25 +718,34 @@ instance
       , M2S_ReadData { _rready = False }
       )
 
-    stateFn _ (_, readVal) dfAck _
-      = P.pure ((addrVal, M2S_ReadData { _rready = dfAck }), processReadVal readVal, False)
+    stateFn _ (_, readVal) dfAck dfAddrInfo
+      = P.pure ((processAddrInfo dfAddrInfo, M2S_ReadData { _rready = dfAck }), processReadVal readVal, False{-TODO-})
 
-    addrVal = M2S_ReadAddress
-      { _arid = 0 -- TODO
-      , _araddr = errorX "no address" -- TODO
-      , _arregion = errorX "no reason" -- TODO what's a region?
-      , _arlen = toKeepType 1
-      , _arsize = toKeepType Bs1
-      , _arburst = toKeepType BmFixed
-      , _arlock = toKeepType NonExclusiveAccess -- TODO
-      , _arcache = errorX "no cache" -- TODO
-      , _arprot = errorX "no prot" -- TODO
-      , _arqos = toKeepType 0 -- kinda TODO
-      , _aruser = errorX "no user data" -- TODO
-      }
+    processAddrInfo = maybe M2S_NoReadAddress (axi4ReadAddrMsgFromReadAddrInfo (toKeepType 1) (toKeepType Bs1) (toKeepType BmFixed))
 
     processReadVal S2M_NoReadData = Nothing
-    processReadVal S2M_ReadData{..} = Just _rdata
+    processReadVal S2M_ReadData{..} = Just (_rdata, _ruser)
+
+instance
+  ( GoodAxi4ReadAddressConfig confAR
+  , GoodAxi4ReadDataConfig confR ) =>
+  ImplicitInfoClass
+    (Axi4ReadAddress dom confAR dataAR,
+     Reverse (Axi4ReadData dom confR userR dat))
+    where
+
+  type ImplicitInfoBwdPayload
+    (Axi4ReadAddress dom confAR dataAR,
+     Reverse (Axi4ReadData dom confR userR dat))
+     = dat
+
+  type ImplicitInfoFwdParam
+    (Axi4ReadAddress dom confAR dataAR,
+     Reverse (Axi4ReadData dom confR userR dat))
+     = Axi4ReadAddressInfo confAR dataAR
+
+  mapFwd (_, a) () = a
+  mapBwd _ (a, _) = a
 
 
 -- | Convert 'DfLike' into a /one-way/ 'Df' port,
