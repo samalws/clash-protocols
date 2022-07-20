@@ -4,18 +4,24 @@ module Tests.Protocols.DfLike where
 
 -- base
 import Prelude
+import Data.Maybe (fromMaybe)
 
 -- clash-prelude
 import qualified Clash.Prelude as C
 
 -- list
-import Data.List (partition, transpose)
+import Data.List (partition, transpose, mapAccumL)
+
+-- containers
+import qualified Data.HashMap.Strict as HashMap
 
 -- extra
 import Data.Proxy (Proxy(..))
 
 -- hedgehog
 import Hedgehog
+import qualified Hedgehog.Gen as Gen
+import qualified Hedgehog.Range as Range
 
 -- tasty
 import Test.Tasty
@@ -151,6 +157,28 @@ prop_df_fifo_id = propWithModelSingleDomain
   where
   ckt :: (C.HiddenClockResetEnable dom) => Circuit (Df dom Int) (Df dom Int)
   ckt = undoDoubleReverseInp $ DfLike.fifo (Proxy, ()) (Proxy, ()) (C.SNat @10)
+
+prop_select :: Property
+prop_select =
+  idWithModel
+    defExpectOptions
+    goGen
+    (snd . uncurry (mapAccumL goModel))
+    (C.withClockResetEnable @C.System C.clockGen C.resetGen C.enableGen ckt)
+ where
+  ckt :: (C.HiddenClockResetEnable dom) => Circuit (C.Vec 3 (Df dom Int), Df dom (C.Index 3)) (Df dom Int)
+  ckt = coerceCircuit $ DfLike.select (C.repeat (Proxy @(Reverse (Df _ Int)), ()), (Proxy @(Reverse (Df _ (C.Index 3))), ())) (Proxy @(Df _ Int), ())
+
+  goModel :: C.Vec 3 [Int] -> C.Index 3 -> (C.Vec 3 [Int], Int)
+  goModel vec ix = let (i:is) = vec C.!! ix in (C.replace ix is vec, i)
+
+  goGen :: Gen (C.Vec 3 [Int], [C.Index 3])
+  goGen = do
+    n <- DfTest.genSmallInt
+    ixs <- Gen.list (Range.singleton n) Gen.enumBounded
+    let tall i = fromMaybe 0 (HashMap.lookup i (tally ixs))
+    dats <- mapM (\i -> Gen.list (Range.singleton (tall i)) DfTest.genSmallInt) C.indicesI
+    pure (dats, ixs)
 
 
 tests :: TestTree

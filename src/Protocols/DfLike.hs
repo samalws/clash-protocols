@@ -21,9 +21,27 @@ module Protocols.DfLike
   , DfLikeParam
   , toDfCircuit
 
+    -- * Class and datatype for implicit info
+  , ImplicitInfo(..)
+  , ImplicitInfoClass
+  , ImplicitInfoFwdPayload
+  , ImplicitInfoBwdPayload
+  , ImplicitInfoFwdParam
+  , mapFwd
+  , mapBwd
+
     -- * Helper functions
   , fromDfCircuit
+  , fromDfCircuit'
   , toDfCircuitHelper
+
+    -- * Associated with Axi4 instance
+  , Axi4WriteAddressInfo
+  , axi4WriteAddrMsgToWriteAddrInfo
+  , axi4WriteAddrMsgFromWriteAddrInfo
+  , Axi4ReadAddressInfo
+  , axi4ReadAddrMsgToReadAddrInfo
+  , axi4ReadAddrMsgFromReadAddrInfo
 
     -- * Utilities to use DfLike one-way
   , dfToDfLikeInp
@@ -74,9 +92,11 @@ import           Control.Monad (when)
 import           Control.Monad.State (State, runState, get, put, gets, modify)
 import           Clash.Prelude hiding
                    (map, fst, snd, zipWith, const, pure, filter, either, zip, select, sample, simulate)
+import qualified Clash.Prelude as C
 import qualified Data.Bifunctor as B
 import           Data.Maybe (fromMaybe, isJust)
 import           Data.Proxy (Proxy(..))
+import           Data.Tuple (swap)
 import           GHC.Stack (HasCallStack)
 
 -- me
@@ -202,6 +222,17 @@ fromDfCircuit
              (Reverse (Df (Dom df) (FwdPayload df)), Df (Dom df) (BwdPayload df))
 fromDfCircuit = coerceCircuit . reverseCircuit . toDfCircuit
 
+-- | 'toDfCircuit', but 'Df' is on the other side.
+-- 'BwdPayload' remains the input data,
+-- and 'FwdPayload' remains the output data.
+-- All the functionality from 'toDfCircuit' is preserved.
+fromDfCircuit'
+  :: (DfLike df, HiddenClockResetEnable (Dom df))
+  => (Proxy df, DfLikeParam df)
+  -> Circuit (Reverse df)
+             (Df (Dom df) (BwdPayload df), Reverse (Df (Dom df) (FwdPayload df)))
+fromDfCircuit' = mapCircuit id id swap swap . fromDfCircuit
+
 -- | Helper function to make it easier to implement 'DfLike'.
 -- 'Ack's are automatically converted to/from 'Bool's,
 -- and 'Df.Data's to/from 'Maybe'.
@@ -245,16 +276,23 @@ toDfCircuitHelper s0 blankOtp stateFn
 instance (NFDataX dat) => DfLike (Reverse (Df dom dat)) where
   type Dom         (Reverse (Df dom dat)) = dom
   type BwdPayload  (Reverse (Df dom dat)) = dat
-  toDfCircuit _ = Circuit (\((_, b), c) -> ((P.pure (Ack False), c), b))
+  toDfCircuit _ = Circuit (uncurry f) where
+    f ~(_, b) c = ((P.pure (Ack False), c), b)
 
 instance (NFDataX dat) => DfLike (Df dom dat) where
   type Dom         (Df dom dat) = dom
   type FwdPayload  (Df dom dat) = dat
-  toDfCircuit _ = Circuit (\((a, _), c) -> ((c, P.pure NoData), a))
+  toDfCircuit _ = Circuit (uncurry f) where
+    f ~(a, _) c = ((c, P.pure NoData), a)
 
 
--- Fifo classes for Axi4 subordinate port
+-- DfLike classes for Axi4
 
+-- | Data carried along 'Axi4WriteAddress' channel which is put in control of the user,
+-- rather than being managed by the 'DfLike' instances.
+-- Matches up one-to-one with the fields of 'M2S_WriteAddress' except for
+-- '_awlen', '_awsize', and '_awburst'.
+-- TODO where should I put this and 'Axi4ReadAddressInfo'?
 data Axi4WriteAddressInfo (conf :: Axi4WriteAddressConfig) (userType :: Type)
   = Axi4WriteAddressInfo
   { -- | Id
@@ -293,20 +331,22 @@ deriving instance
   , NFDataX userType ) =>
   NFDataX (Axi4WriteAddressInfo conf userType)
 
+-- | Convert 'M2S_WriteAddress' to 'Axi4WriteAddressInfo', dropping some info
 axi4WriteAddrMsgToWriteAddrInfo :: M2S_WriteAddress conf userType -> Axi4WriteAddressInfo conf userType
 axi4WriteAddrMsgToWriteAddrInfo M2S_NoWriteAddress = errorX "Expected WriteAddress"
 axi4WriteAddrMsgToWriteAddrInfo M2S_WriteAddress{..}
   = Axi4WriteAddressInfo
-  { _awiid = _awid
-  , _awiaddr = _awaddr
+  { _awiid     = _awid
+  , _awiaddr   = _awaddr
   , _awiregion = _awregion
-  , _awilock = _awlock
-  , _awicache = _awcache
-  , _awiprot = _awprot
-  , _awiqos = _awqos
-  , _awiuser = _awuser
+  , _awilock   = _awlock
+  , _awicache  = _awcache
+  , _awiprot   = _awprot
+  , _awiqos    = _awqos
+  , _awiuser   = _awuser
   }
 
+-- | Convert 'Axi4WriteAddressInfo' to 'M2S_WriteAddress', adding some info
 axi4WriteAddrMsgFromWriteAddrInfo
   :: BurstLengthType (AWKeepBurstLength conf)
   -> SizeType (AWKeepSize conf)
@@ -315,18 +355,22 @@ axi4WriteAddrMsgFromWriteAddrInfo
   -> M2S_WriteAddress conf userType
 axi4WriteAddrMsgFromWriteAddrInfo _awlen _awsize _awburst Axi4WriteAddressInfo{..}
   = M2S_WriteAddress
-  { _awid = _awiid
-  , _awaddr = _awiaddr
+  { _awid     = _awiid
+  , _awaddr   = _awiaddr
   , _awregion = _awiregion
-  , _awlock = _awilock
-  , _awcache = _awicache
-  , _awprot = _awiprot
-  , _awqos = _awiqos
-  , _awuser = _awiuser
+  , _awlock   = _awilock
+  , _awcache  = _awicache
+  , _awprot   = _awiprot
+  , _awqos    = _awiqos
+  , _awuser   = _awiuser
   , _awlen, _awsize, _awburst
   }
 
 
+-- | Data carried along 'Axi4ReadAddress' channel which is put in control of the user,
+-- rather than being managed by the 'DfLike' instances.
+-- Matches up one-to-one with the fields of 'M2S_ReadAddress' except for
+-- '_arlen', '_arsize', and '_arburst'.
 data Axi4ReadAddressInfo (conf :: Axi4ReadAddressConfig) (userType :: Type)
   = Axi4ReadAddressInfo
   { -- | Id
@@ -365,20 +409,22 @@ deriving instance
   , NFDataX userType ) =>
   NFDataX (Axi4ReadAddressInfo conf userType)
 
+-- | Convert 'M2S_ReadAddress' to 'Axi4ReadAddressInfo', dropping some info
 axi4ReadAddrMsgToReadAddrInfo :: M2S_ReadAddress conf userType -> Axi4ReadAddressInfo conf userType
 axi4ReadAddrMsgToReadAddrInfo M2S_NoReadAddress = errorX "Expected ReadAddress"
 axi4ReadAddrMsgToReadAddrInfo M2S_ReadAddress{..}
   = Axi4ReadAddressInfo
-  { _ariid = _arid
-  , _ariaddr = _araddr
+  { _ariid     = _arid
+  , _ariaddr   = _araddr
   , _ariregion = _arregion
-  , _arilock = _arlock
-  , _aricache = _arcache
-  , _ariprot = _arprot
-  , _ariqos = _arqos
-  , _ariuser = _aruser
+  , _arilock   = _arlock
+  , _aricache  = _arcache
+  , _ariprot   = _arprot
+  , _ariqos    = _arqos
+  , _ariuser   = _aruser
   }
 
+-- | Convert 'Axi4ReadAddressInfo' to 'M2S_ReadAddress', adding some info
 axi4ReadAddrMsgFromReadAddrInfo
   :: BurstLengthType (ARKeepBurstLength conf)
   -> SizeType (ARKeepSize conf)
@@ -387,16 +433,19 @@ axi4ReadAddrMsgFromReadAddrInfo
   -> M2S_ReadAddress conf userType
 axi4ReadAddrMsgFromReadAddrInfo _arlen _arsize _arburst Axi4ReadAddressInfo{..}
   = M2S_ReadAddress
-  { _arid = _ariid
-  , _araddr = _ariaddr
+  { _arid     = _ariid
+  , _araddr   = _ariaddr
   , _arregion = _ariregion
-  , _arlock = _arilock
-  , _arcache = _aricache
-  , _arprot = _ariprot
-  , _arqos = _ariqos
-  , _aruser = _ariuser
+  , _arlock   = _arilock
+  , _arcache  = _aricache
+  , _arprot   = _ariprot
+  , _arqos    = _ariqos
+  , _aruser   = _ariuser
   , _arlen, _arsize, _arburst
   }
+
+
+-- Fifo classes for Axi4 subordinate port
 
 
 -- Does not support burst modes other than fixed.
@@ -436,45 +485,45 @@ instance
                , S2M_WriteData{_wready = False}
                , S2M_NoWriteResponse)
 
-    stateFn (wAddrVal, wDataVal, wRespAck) ack wRespItem = do
+    stateFn (wAddrVal, wDataVal, wRespAck) dfAckIn dfDatIn = do
       wAddrAck <- processWAddr wAddrVal
-      (wDataAck, inpItem) <- processWData wDataVal
-      wRespVal <- sendWResp
-      P.pure ((wAddrAck, wDataAck, wRespVal), inpItem, _bready wRespAck)
-      where
+      (wDataAck, dfDatOut) <- processWData wDataVal dfAckIn
+      wRespVal <- sendWResp wRespAck dfDatIn
+      let dfAckOut = _bready wRespAck
+      P.pure ((wAddrAck, wDataAck, wRespVal), dfDatOut, dfAckOut)
 
-      processWAddr M2S_NoWriteAddress = P.pure (S2M_WriteAddress{_awready = False})
-      processWAddr msg
-        | maybe True (/= BmFixed) (fromKeepType $ _awburst msg) = P.pure (S2M_WriteAddress{_awready = True})
-        | otherwise = do
-           (_,b) <- get
-           put (Just (axi4WriteAddrMsgToWriteAddrInfo msg), b)
-           P.pure (S2M_WriteAddress{_awready = True})
+    processWAddr M2S_NoWriteAddress = P.pure (S2M_WriteAddress{_awready = False})
+    processWAddr msg
+      | maybe True (/= BmFixed) (fromKeepType $ _awburst msg) = P.pure (S2M_WriteAddress{_awready = True})
+      | otherwise = do
+         (_,b) <- get
+         put (Just (axi4WriteAddrMsgToWriteAddrInfo msg), b)
+         P.pure (S2M_WriteAddress{_awready = True})
 
-      processWData M2S_NoWriteData = P.pure (S2M_WriteData{_wready = False}, Nothing)
-      processWData M2S_WriteData{_wlast, _wdata, _wuser} = do
-        (writingID,respID) <- get
-        -- we only want to output _wready = false
-        --   if we're the recpient of the writes AND ack is false
-        -- we only want to return data if we're the recpient of the writes
-        -- we only want to output on writeresponse
-        --   if we're the recipient of the writes AND ack is true
-        case (writingID, ack) of
-          (Nothing, _) -> P.pure (S2M_WriteData{_wready = True}, Nothing)
-          (Just info, False) -> P.pure (S2M_WriteData{_wready = False}, Just (info, _wdata, _wuser))
-          (Just info, True) -> do
-            put (Nothing,
-                 if _wlast
-                 then Just (_awiid info)
-                 else respID)
-            P.pure (S2M_WriteData{_wready = True}, Just (info, _wdata, _wuser))
+    processWData M2S_NoWriteData _ = P.pure (S2M_WriteData{_wready = False}, Nothing)
+    processWData M2S_WriteData{_wlast, _wdata, _wuser} dfAckIn = do
+      (writingID,respID) <- get
+      -- we only want to output _wready = false
+      --   if we're the recpient of the writes AND dfAckIn is false
+      -- we only want to return data if we're the recpient of the writes
+      -- we only want to output on writeresponse
+      --   if we're the recipient of the writes AND dfAckIn is true
+      case (writingID, dfAckIn) of
+        (Nothing, _) -> P.pure (S2M_WriteData{_wready = True}, Nothing)
+        (Just info, False) -> P.pure (S2M_WriteData{_wready = False}, Just (info, _wdata, _wuser))
+        (Just info, True) -> do
+          put (Nothing,
+               if _wlast
+               then Just (_awiid info)
+               else respID)
+          P.pure (S2M_WriteData{_wready = True}, Just (info, _wdata, _wuser))
 
-      sendWResp = do
-        respID <- gets P.snd
-        when (_bready wRespAck || isJust wRespItem) $ modify (\(a, _) -> (a, Nothing))
-        P.pure $ case (respID, wRespItem) of
-          (Just _bid, Just (Just (_bresp, _buser))) -> S2M_WriteResponse{..}
-          _ -> S2M_NoWriteResponse
+    sendWResp wRespAck dfDatIn = do
+      respID <- gets P.snd
+      when (_bready wRespAck || isJust dfDatIn) $ modify (\(a, _) -> (a, Nothing))
+      P.pure $ case (respID, dfDatIn) of
+        (Just _bid, Just (Just (_bresp, _buser))) -> S2M_WriteResponse{..}
+        _ -> S2M_NoWriteResponse
 
 instance
   ( GoodAxi4WriteAddressConfig confAW
@@ -536,37 +585,37 @@ instance
 
     blankOtp = (S2M_ReadAddress { _arready = False }, S2M_NoReadData)
 
-    stateFn (addrVal, dataAck) dfAddrAck otpItem = do -- TODO really need a naming convention here
-      (addrAck, dfAddr) <- processAddr addrVal
-      (dataVal,sentData) <- sendData
+    stateFn (addrVal, dataAck) dfAckIn dfDatIn = do
+      (addrAck, dfDatOut) <- processAddr addrVal dfAckIn
+      (dataVal,dfAckOut) <- sendData dfDatIn
       processDataAck dataAck
-      P.pure ((addrAck,dataVal),dfAddr,sentData)
-      where
-        processAddr M2S_NoReadAddress = P.pure (S2M_ReadAddress { _arready = False }, Nothing)
-        processAddr msg
-          | maybe True (/= BmFixed) (fromKeepType $ _arburst msg) = P.pure (S2M_ReadAddress{ _arready = True }, Nothing)
-          | otherwise = do
-              (burstLenLeft,_,c) <- get
-              when (burstLenLeft == 0) $ put (fromMaybe 1 (fromKeepType $ _arlen msg), _arid msg, c)
-              P.pure (S2M_ReadAddress{ _arready = burstLenLeft == 0 && dfAddrAck }, Just (axi4ReadAddrMsgToReadAddrInfo msg))
+      P.pure ((addrAck,dataVal),dfDatOut,dfAckOut)
 
-        sendData = do
-          (burstLenLeft,readId,currOtp) <- get
-          sentData <- case (currOtp, burstLenLeft == 0, otpItem) of
-            (S2M_NoReadData, False, Just (_rdata, _ruser, _rresp)) -> do
-              put (burstLenLeft-1, readId,
-                S2M_ReadData
-                  { _rid = readId
-                  , _rlast = burstLenLeft == 1
-                  , _rdata, _ruser, _rresp })
-              P.pure True
-            _ -> P.pure False
-          (_,_,currOtp') <- get
-          P.pure (currOtp', sentData)
+    processAddr M2S_NoReadAddress _ = P.pure (S2M_ReadAddress { _arready = False }, Nothing)
+    processAddr msg dfAckIn
+      | maybe True (/= BmFixed) (fromKeepType $ _arburst msg) = P.pure (S2M_ReadAddress{ _arready = True }, Nothing)
+      | otherwise = do
+          (burstLenLeft,_,c) <- get
+          when (burstLenLeft == 0) $ put (fromMaybe 1 (fromKeepType $ _arlen msg), _arid msg, c)
+          P.pure (S2M_ReadAddress{ _arready = burstLenLeft == 0 && dfAckIn }, Just (axi4ReadAddrMsgToReadAddrInfo msg))
 
-        processDataAck M2S_ReadData{_rready} = when _rready $ do
-          (a,b,_) <- get
-          put (a,b,S2M_NoReadData)
+    sendData dfDatIn = do
+      (burstLenLeft,readId,currOtp) <- get
+      sentData <- case (currOtp, burstLenLeft == 0, dfDatIn) of
+        (S2M_NoReadData, False, Just (_rdata, _ruser, _rresp)) -> do
+          put (burstLenLeft-1, readId,
+            S2M_ReadData
+              { _rid = readId
+              , _rlast = burstLenLeft == 1
+              , _rdata, _ruser, _rresp })
+          P.pure True
+        _ -> P.pure False
+      (_,_,currOtp') <- get
+      P.pure (currOtp', sentData)
+
+    processDataAck M2S_ReadData{_rready} = when _rready $ do
+      (a,b,_) <- get
+      put (a,b,S2M_NoReadData)
 
 instance
   ( GoodAxi4ReadAddressConfig confAR
@@ -632,35 +681,35 @@ instance
       , M2S_WriteResponse { _bready = False }
       )
 
-    stateFn _ (addrAck, dataAck, respVal) dfRespAck otpItem = do
-      addrMsg <- sendAddr addrAck otpItem
-      (dataMsg, sentData) <- sendData dataAck otpItem
-      (respAck, dfRespDat) <- receiveResp respVal
-      P.pure ((addrMsg, dataMsg, respAck), dfRespDat, sentData)
-      where -- TODO why the nested wheres?
-        sendAddr _ Nothing = P.pure M2S_NoWriteAddress
-        sendAddr S2M_WriteAddress{_awready} (Just (info, _, _)) = do
-          (addrReceived, b) <- get
-          put (_awready || addrReceived, b)
-          P.pure $ if addrReceived then M2S_NoWriteAddress
-                   else axi4WriteAddrMsgFromWriteAddrInfo (toKeepType 1) (toKeepType Bs1) (toKeepType BmFixed) info
+    stateFn _ (addrAck, dataAck, respVal) dfAckIn dfDatIn = do
+      addrMsg <- sendAddr addrAck dfDatIn
+      (dataMsg, dfAckOut) <- sendData dataAck dfDatIn
+      (respAck, dfDatOut) <- receiveResp respVal dfAckIn
+      P.pure ((addrMsg, dataMsg, respAck), dfDatOut, dfAckOut)
 
-        sendData _ Nothing = P.pure (M2S_NoWriteData, False)
-        sendData S2M_WriteData{_wready} (Just (_, dat, user)) = do
-          (addrReceived, dataReceived) <- get
-          put (addrReceived, _wready || dataReceived)
-          P.pure $ if (not addrReceived || dataReceived) then (M2S_NoWriteData, False) else (M2S_WriteData
-            { _wdata = dat
-            , _wlast = True
-            , _wuser = user
-            }, _wready)
+    sendAddr _ Nothing = P.pure M2S_NoWriteAddress
+    sendAddr S2M_WriteAddress{_awready} (Just (info, _, _)) = do
+      (addrReceived, b) <- get
+      put (_awready || addrReceived, b)
+      P.pure $ if addrReceived then M2S_NoWriteAddress
+               else axi4WriteAddrMsgFromWriteAddrInfo (toKeepType 1) (toKeepType Bs1) (toKeepType BmFixed) info
 
-        receiveResp S2M_NoWriteResponse = P.pure (M2S_WriteResponse { _bready = False }, Nothing)
-        receiveResp S2M_WriteResponse{_bresp,_buser} = do
-          (_, dataReceived) <- get
-          let shouldAckResponse = dataReceived && dfRespAck
-          when shouldAckResponse $ put (False, False)
-          P.pure (M2S_WriteResponse { _bready = shouldAckResponse }, Just (_bresp,_buser))
+    sendData _ Nothing = P.pure (M2S_NoWriteData, False)
+    sendData S2M_WriteData{_wready} (Just (_, dat, user)) = do
+      (addrReceived, dataReceived) <- get
+      put (addrReceived, _wready || dataReceived)
+      P.pure $ if (not addrReceived || dataReceived) then (M2S_NoWriteData, False) else (M2S_WriteData
+        { _wdata = dat
+        , _wlast = True
+        , _wuser = user
+        }, _wready)
+
+    receiveResp S2M_NoWriteResponse _ = P.pure (M2S_WriteResponse { _bready = False }, Nothing)
+    receiveResp S2M_WriteResponse{_bresp,_buser} dfAckIn = do
+      (_, dataReceived) <- get
+      let shouldAckResponse = dataReceived && dfAckIn
+      when shouldAckResponse $ put (False, False)
+      P.pure (M2S_WriteResponse { _bready = shouldAckResponse }, Just (_bresp,_buser))
 
 instance
   ( GoodAxi4WriteAddressConfig confAW
@@ -718,8 +767,8 @@ instance
       , M2S_ReadData { _rready = False }
       )
 
-    stateFn _ (_, readVal) dfAck dfAddrInfo
-      = P.pure ((processAddrInfo dfAddrInfo, M2S_ReadData { _rready = dfAck }), processReadVal readVal, False{-TODO-})
+    stateFn _ (addrAck, readVal) dfAckIn dfDatIn
+      = P.pure ((processAddrInfo dfDatIn, M2S_ReadData { _rready = dfAckIn }), processReadVal readVal, _arready addrAck)
 
     processAddrInfo = maybe M2S_NoReadAddress (axi4ReadAddrMsgFromReadAddrInfo (toKeepType 1) (toKeepType Bs1) (toKeepType BmFixed))
 
@@ -786,6 +835,22 @@ vecToDfLikeOtp
   -> Circuit (Vec n (Df (Dom df) (FwdPayload df))) (Vec n df)
 vecToDfLikeOtp = vecCircuits . fmap dfToDfLikeOtp
 
+vecToDfLike
+  :: DfLike df
+  => HiddenClockResetEnable (Dom df)
+  => KnownNat n
+  => Vec n (Proxy df, DfLikeParam df)
+  -> Circuit (Vec n (Df (Dom df) (FwdPayload df)), Vec n (Reverse (Df (Dom df) (BwdPayload df)))) (Vec n df)
+vecToDfLike params = mapCircuit (uncurry C.zip) unzip id id $ vecCircuits $ toDfCircuit <$> params
+
+vecFromDfLike
+  :: DfLike df
+  => HiddenClockResetEnable (Dom df)
+  => KnownNat n
+  => Vec n (Proxy df, DfLikeParam df)
+  -> Circuit (Vec n (Reverse df)) (Vec n (Df (Dom df) (BwdPayload df)), Vec n (Reverse (Df (Dom df) (FwdPayload df))))
+vecFromDfLike params = mapCircuit id id unzip (uncurry C.zip) $ vecCircuits $ fromDfCircuit' <$> params
+
 -- | Convert a pair of (possibly different from each other) 'DfLike's
 -- into a pair of /one-way/ 'Df' ports, at the data input end
 tupToDfLikeInp
@@ -812,11 +877,49 @@ tupToDfLikeOtp
 tupToDfLikeOtp (argsA, argsB) = coerceCircuit
                               $ tupCircuits (dfToDfLikeOtp argsA) (dfToDfLikeOtp argsB)
 
+tupToDfLike
+  :: DfLike dfA
+  => DfLike dfB
+  => Dom dfA ~ Dom dfB
+  => HiddenClockResetEnable (Dom dfA)
+  => ((Proxy dfA, DfLikeParam dfA), (Proxy dfB, DfLikeParam dfB))
+  -> Circuit ((Df (Dom dfA) (FwdPayload dfA), Df (Dom dfB) (FwdPayload dfB)), (Reverse (Df (Dom dfA) (BwdPayload dfA)), Reverse (Df (Dom dfB) (BwdPayload dfB))))
+             (dfA, dfB)
+tupToDfLike (argsA, argsB) = mapCircuit f f id id $ tupCircuits (toDfCircuit argsA) (toDfCircuit argsB) where
+  f ((a,b),(c,d)) = ((a,c),(b,d))
+
+tupFromDfLike
+  :: DfLike dfA
+  => DfLike dfB
+  => Dom dfA ~ Dom dfB
+  => HiddenClockResetEnable (Dom dfA)
+  => ((Proxy dfA, DfLikeParam dfA), (Proxy dfB, DfLikeParam dfB))
+  -> Circuit (Reverse (dfA, dfB))
+             ((Df (Dom dfA) (BwdPayload dfA), Df (Dom dfB) (BwdPayload dfB)), (Reverse (Df (Dom dfA) (FwdPayload dfA)), Reverse (Df (Dom dfB) (FwdPayload dfB))))
+tupFromDfLike (argsA, argsB) = mapCircuit id id f g $ tupCircuits (fromDfCircuit argsA) (fromDfCircuit argsB) where
+  f ((a,b),(c,d)) = ((b,d),(a,c))
+  g ((a,b),(c,d)) = ((c,a),(d,b))
+
+tupToVec :: Circuit (a,a) (Vec 2 a)
+tupToVec = Circuit ((f *** g) . swap) where
+  f :: Vec 2 p -> (p,p)
+  f (x :> y :> Nil) = (x,y)
+  f _ = undefined -- to suppress warning
+  g (x,y) = x :> y :> Nil
+
+vecToTup :: Circuit (Vec 2 a) (a,a)
+vecToTup = Circuit ((g *** f) . swap) where
+  f :: Vec 2 p -> (p,p)
+  f (x :> y :> Nil) = (x,y)
+  f _ = undefined -- to suppress warning
+  g (x,y) = x :> y :> Nil
+
 
 -- | Like 'P.map'
 map ::
   ( DfLike dfA
   , DfLike dfB
+  , FwdPayload dfA ~ BwdPayload dfB
   , Dom dfA ~ Dom dfB
   , HiddenClockResetEnable (Dom dfA) ) =>
   (Proxy dfA, DfLikeParam dfA) ->
@@ -824,14 +927,15 @@ map ::
   (BwdPayload dfA -> FwdPayload dfB) ->
   Circuit (Reverse dfA) dfB
 map dfA dfB f
-  =  dfToDfLikeInp dfA
-  |> Df.map f
-  |> dfToDfLikeOtp dfB
+  =  fromDfCircuit' dfA
+  |> tupCircuits (Df.map f) idC
+  |> toDfCircuit dfB
 
 -- | Like 'P.fst'
 fst ::
   ( DfLike dfA
   , DfLike dfB
+  , FwdPayload dfA ~ BwdPayload dfB
   , Dom dfA ~ Dom dfB
   , HiddenClockResetEnable (Dom dfA)
   , BwdPayload dfA ~ (a, b)
@@ -840,14 +944,15 @@ fst ::
   (Proxy dfB, DfLikeParam dfB) ->
   Circuit (Reverse dfA) dfB
 fst dfA dfB
-  =  dfToDfLikeInp dfA
-  |> Df.fst
-  |> dfToDfLikeOtp dfB
+  =  fromDfCircuit' dfA
+  |> tupCircuits Df.fst idC
+  |> toDfCircuit dfB
 
 -- | Like 'P.fst'
 snd ::
   ( DfLike dfA
   , DfLike dfB
+  , FwdPayload dfA ~ BwdPayload dfB
   , Dom dfA ~ Dom dfB
   , HiddenClockResetEnable (Dom dfA)
   , BwdPayload dfA ~ (a, b)
@@ -856,14 +961,15 @@ snd ::
   (Proxy dfB, DfLikeParam dfB) ->
   Circuit (Reverse dfA) dfB
 snd dfA dfB
-  =  dfToDfLikeInp dfA
-  |> Df.snd
-  |> dfToDfLikeOtp dfB
+  =  fromDfCircuit' dfA
+  |> tupCircuits Df.snd idC
+  |> toDfCircuit dfB
 
 -- | Like 'Data.Bifunctor.bimap'
 bimap ::
   ( DfLike dfA
   , DfLike dfB
+  , FwdPayload dfA ~ BwdPayload dfB
   , Dom dfA ~ Dom dfB
   , HiddenClockResetEnable (Dom dfA)
   , B.Bifunctor p
@@ -875,14 +981,15 @@ bimap ::
   (c -> d) ->
   Circuit (Reverse dfA) dfB
 bimap dfA dfB f g
-  =  dfToDfLikeInp dfA
-  |> Df.bimap f g
-  |> dfToDfLikeOtp dfB
+  =  fromDfCircuit' dfA
+  |> tupCircuits (Df.bimap f g) idC
+  |> toDfCircuit dfB
 
 -- | Like 'Data.Bifunctor.first'
 first ::
   ( DfLike dfA
   , DfLike dfB
+  , FwdPayload dfA ~ BwdPayload dfB
   , Dom dfA ~ Dom dfB
   , HiddenClockResetEnable (Dom dfA)
   , B.Bifunctor p
@@ -893,14 +1000,15 @@ first ::
   (a -> b) ->
   Circuit (Reverse dfA) dfB
 first dfA dfB f
-  =  dfToDfLikeInp dfA
-  |> Df.first f
-  |> dfToDfLikeOtp dfB
+  =  fromDfCircuit' dfA
+  |> tupCircuits (Df.first f) idC
+  |> toDfCircuit dfB
 
 -- | Like 'Data.Bifunctor.second'
 second ::
   ( DfLike dfA
   , DfLike dfB
+  , FwdPayload dfA ~ BwdPayload dfB
   , Dom dfA ~ Dom dfB
   , HiddenClockResetEnable (Dom dfA)
   , B.Bifunctor p
@@ -911,14 +1019,15 @@ second ::
   (b -> c) ->
   Circuit (Reverse dfA) dfB
 second dfA dfB f
-  =  dfToDfLikeInp dfA
-  |> Df.second f
-  |> dfToDfLikeOtp dfB
+  =  fromDfCircuit' dfA
+  |> tupCircuits (Df.second f) idC
+  |> toDfCircuit dfB
 
 -- | Acknowledge but ignore data from LHS protocol. Send a static value /b/.
 const ::
   ( DfLike dfA
   , DfLike dfB
+  , FwdPayload dfA ~ BwdPayload dfB
   , Dom dfA ~ Dom dfB
   , HiddenClockResetEnable (Dom dfA) ) =>
   (Proxy dfA, DfLikeParam dfA) ->
@@ -926,9 +1035,9 @@ const ::
   FwdPayload dfB ->
   Circuit (Reverse dfA) dfB
 const dfA dfB b
-  =  dfToDfLikeInp dfA
-  |> Df.const b
-  |> dfToDfLikeOtp dfB
+  =  fromDfCircuit' dfA
+  |> tupCircuits (Df.const b) idC
+  |> toDfCircuit dfB
 
 -- | Drive a constant value composed of /a/.
 pure ::
@@ -954,6 +1063,7 @@ void df = dfToDfLikeInp df
 catMaybes ::
   ( DfLike dfA
   , DfLike dfB
+  , FwdPayload dfA ~ BwdPayload dfB
   , Dom dfA ~ Dom dfB
   , HiddenClockResetEnable (Dom dfA)
   , BwdPayload dfA ~ Maybe (FwdPayload dfB) ) =>
@@ -961,14 +1071,15 @@ catMaybes ::
   (Proxy dfB, DfLikeParam dfB) ->
   Circuit (Reverse dfA) dfB
 catMaybes dfA dfB
-  =  dfToDfLikeInp dfA
-  |> Df.catMaybes
-  |> dfToDfLikeOtp dfB
+  =  fromDfCircuit' dfA
+  |> tupCircuits (Df.catMaybes) idC
+  |> toDfCircuit dfB
 
 -- | Like 'Data.Maybe.mapMaybe'
 mapMaybe ::
   ( DfLike dfA
   , DfLike dfB
+  , FwdPayload dfA ~ BwdPayload dfB
   , Dom dfA ~ Dom dfB
   , HiddenClockResetEnable (Dom dfA)
   , NFDataX (FwdPayload dfB) ) =>
@@ -977,14 +1088,15 @@ mapMaybe ::
   (BwdPayload dfA -> Maybe (FwdPayload dfB)) ->
   Circuit (Reverse dfA) dfB
 mapMaybe dfA dfB f
-  =  dfToDfLikeInp dfA
-  |> Df.mapMaybe f
-  |> dfToDfLikeOtp dfB
+  =  fromDfCircuit' dfA
+  |> tupCircuits (Df.mapMaybe f) idC
+  |> toDfCircuit dfB
 
 -- | Like 'P.filter'
 filter ::
   ( DfLike dfA
   , DfLike dfB
+  , FwdPayload dfA ~ BwdPayload dfB
   , Dom dfA ~ Dom dfB
   , HiddenClockResetEnable (Dom dfA)
   , BwdPayload dfA ~ FwdPayload dfB ) =>
@@ -993,14 +1105,15 @@ filter ::
   (BwdPayload dfA -> Bool) ->
   Circuit (Reverse dfA) dfB
 filter dfA dfB f
-  =  dfToDfLikeInp dfA
-  |> Df.filter f
-  |> dfToDfLikeOtp dfB
+  =  fromDfCircuit' dfA
+  |> tupCircuits (Df.filter f) idC
+  |> toDfCircuit dfB
 
 -- | Like 'Data.Either.Combinators.mapLeft'
 mapLeft ::
   ( DfLike dfA
   , DfLike dfB
+  , FwdPayload dfA ~ BwdPayload dfB
   , Dom dfA ~ Dom dfB
   , HiddenClockResetEnable (Dom dfA)
   , BwdPayload dfA ~ Either a c
@@ -1010,14 +1123,15 @@ mapLeft ::
   (a -> b) ->
   Circuit (Reverse dfA) dfB
 mapLeft dfA dfB f
-  =  dfToDfLikeInp dfA
-  |> Df.mapLeft f
-  |> dfToDfLikeOtp dfB
+  =  fromDfCircuit' dfA
+  |> tupCircuits (Df.mapLeft f) idC
+  |> toDfCircuit dfB
 
 -- | Like 'Data.Either.Combinators.mapRight'
 mapRight ::
   ( DfLike dfA
   , DfLike dfB
+  , FwdPayload dfA ~ BwdPayload dfB
   , Dom dfA ~ Dom dfB
   , HiddenClockResetEnable (Dom dfA)
   , BwdPayload dfA ~ Either a b
@@ -1027,14 +1141,15 @@ mapRight ::
   (b -> c) ->
   Circuit (Reverse dfA) dfB
 mapRight dfA dfB f
-  =  dfToDfLikeInp dfA
-  |> Df.mapRight f
-  |> dfToDfLikeOtp dfB
+  =  fromDfCircuit' dfA
+  |> tupCircuits (Df.mapRight f) idC
+  |> toDfCircuit dfB
 
 -- | Like 'Data.Either.either'
 either ::
   ( DfLike dfA
   , DfLike dfB
+  , FwdPayload dfA ~ BwdPayload dfB
   , Dom dfA ~ Dom dfB
   , HiddenClockResetEnable (Dom dfA)
   , BwdPayload dfA ~ Either a b ) =>
@@ -1044,15 +1159,17 @@ either ::
   (b -> FwdPayload dfB) ->
   Circuit (Reverse dfA) dfB
 either dfA dfB f g
-  =  dfToDfLikeInp dfA
-  |> Df.either f g
-  |> dfToDfLikeOtp dfB
+  =  fromDfCircuit' dfA
+  |> tupCircuits (Df.either f g) idC
+  |> toDfCircuit dfB
 
 -- | Like 'P.zipWith'. Any data not in /Payload/ is copied from stream A.
 zipWith ::
   ( DfLike dfA
   , DfLike dfB
   , DfLike dfC
+  , FwdPayload dfA ~ BwdPayload dfC
+  , FwdPayload dfB ~ BwdPayload dfC
   , Dom dfA ~ Dom dfB
   , Dom dfA ~ Dom dfC
   , HiddenClockResetEnable (Dom dfA) ) =>
@@ -1061,15 +1178,20 @@ zipWith ::
   (BwdPayload dfA -> BwdPayload dfB -> FwdPayload dfC) ->
   Circuit (Reverse (dfA, dfB)) dfC
 zipWith dfAB dfC f
-  =  tupToDfLikeInp dfAB
-  |> Df.zipWith f
-  |> dfToDfLikeOtp dfC
+  =  tupFromDfLike dfAB
+  |> coerceCircuit
+  (  tupCircuits
+     (Df.zipWith f)
+     (reverseCircuit $ Df.roundrobin |> vecToTup))
+  |> toDfCircuit dfC
 
 -- | Like 'P.zip'
 zip ::
   ( DfLike dfA
   , DfLike dfB
   , DfLike dfC
+  , FwdPayload dfA ~ BwdPayload dfC
+  , FwdPayload dfB ~ BwdPayload dfC
   , Dom dfA ~ Dom dfB
   , Dom dfA ~ Dom dfC
   , HiddenClockResetEnable (Dom dfA)
@@ -1078,15 +1200,20 @@ zip ::
   (Proxy dfC, DfLikeParam dfC) ->
   Circuit (Reverse (dfA, dfB)) dfC
 zip dfAB dfC
-  =  tupToDfLikeInp dfAB
-  |> Df.zip
-  |> dfToDfLikeOtp dfC
+  =  tupFromDfLike dfAB
+  |> coerceCircuit
+  (  tupCircuits
+     Df.zip
+     (reverseCircuit $ Df.roundrobin |> vecToTup))
+  |> toDfCircuit dfC
 
 -- | Like 'P.partition'
 partition ::
   ( DfLike dfA
   , DfLike dfB
   , DfLike dfC
+  , FwdPayload dfA ~ BwdPayload dfB
+  , FwdPayload dfA ~ BwdPayload dfC
   , Dom dfA ~ Dom dfB
   , Dom dfA ~ Dom dfC
   , HiddenClockResetEnable (Dom dfA)
@@ -1097,25 +1224,45 @@ partition ::
   (BwdPayload dfA -> Bool) ->
   Circuit (Reverse dfA) (dfB, dfC)
 partition dfA dfBC f
-  =  dfToDfLikeInp dfA
-  |> Df.partition f
-  |> tupToDfLikeOtp dfBC
+  =  fromDfCircuit' dfA
+  |> coerceCircuit
+  (  tupCircuits
+     (Df.partition f)
+     (reverseCircuit $ tupToVec |> Df.roundrobinCollect Df.Parallel))
+  |> tupToDfLike dfBC
 
 -- | Route a DfLike stream to another corresponding to the index
 route ::
   ( DfLike dfA
   , DfLike dfB
+  , FwdPayload dfA ~ BwdPayload dfB
   , Dom dfA ~ Dom dfB
   , HiddenClockResetEnable (Dom dfA)
   , BwdPayload dfA ~ (Index n, FwdPayload dfB)
-  , KnownNat n ) =>
+  , KnownNat n
+  , 1 <= n ) =>
   (Proxy dfA, DfLikeParam dfA) ->
   Vec n (Proxy dfB, DfLikeParam dfB) ->
   Circuit (Reverse dfA) (Vec n dfB)
 route dfA dfB
-  =  dfToDfLikeInp dfA
-  |> Df.route
-  |> vecToDfLikeOtp dfB
+  =  fromDfCircuit' dfA
+  |> coerceCircuit
+  (  tupCircuits
+     Df.route
+     (reverseCircuit (Df.roundrobinCollect Df.Parallel)))
+  |> vecToDfLike dfB
+
+selectHelperA :: Circuit ((a,b),(c,d)) ((a,c),(b,d))
+selectHelperA = Circuit ((f *** f) . swap) where
+  f ((a,b),(c,d)) = ((a,c),(b,d))
+
+selectHelperB :: Circuit (Vec (n+1) a) (Vec n a, a)
+selectHelperB = Circuit ((f *** g) . swap) where
+  f :: (Vec n q, q) -> Vec (n+1) q
+  f (t, h) = h :> t
+  g :: Vec (n+1) q -> (Vec n q, q)
+  g (h :> t) = (t, h)
+  g _ = undefined -- to avoid warning
 
 -- | Select data from the channel indicated by the DfLike stream carrying
 -- @Index n@.
@@ -1123,6 +1270,8 @@ select ::
   ( DfLike dfA
   , DfLike dfB
   , DfLike dfC
+  , FwdPayload dfA ~ BwdPayload dfC
+  , FwdPayload dfB ~ BwdPayload dfC
   , Dom dfA ~ Dom dfB
   , Dom dfA ~ Dom dfC
   , HiddenClockResetEnable (Dom dfA)
@@ -1133,15 +1282,21 @@ select ::
   (Proxy dfC, DfLikeParam dfC) ->
   Circuit (Vec n (Reverse dfA), Reverse dfB) dfC
 select (dfA, dfB) dfC
-  =  tupCircuits (vecToDfLikeInp dfA) (dfToDfLikeInp dfB)
-  |> Df.select
-  |> dfToDfLikeOtp dfC
+  =  tupCircuits (vecFromDfLike dfA) (fromDfCircuit' dfB)
+  |> selectHelperA
+  |> coerceCircuit
+  (  tupCircuits
+     Df.select
+     (reverseCircuit $ Df.roundrobin |> selectHelperB))
+  |> toDfCircuit dfC
 
 -- | Select /selectN/ samples from channel /n/.
 selectN ::
   ( DfLike dfA
   , DfLike dfB
   , DfLike dfC
+  , FwdPayload dfA ~ BwdPayload dfC
+  , FwdPayload dfB ~ BwdPayload dfC
   , Dom dfA ~ Dom dfB
   , Dom dfA ~ Dom dfC
   , HiddenClockResetEnable (Dom dfA)
@@ -1153,9 +1308,13 @@ selectN ::
   (Proxy dfC, DfLikeParam dfC) ->
   Circuit (Vec n (Reverse dfA), Reverse dfB) dfC
 selectN (dfA, dfB) dfC
-  =  tupCircuits (vecToDfLikeInp dfA) (dfToDfLikeInp dfB)
-  |> Df.selectN
-  |> dfToDfLikeOtp dfC
+  =  tupCircuits (vecFromDfLike dfA) (fromDfCircuit' dfB)
+  |> selectHelperA
+  |> coerceCircuit
+  (  tupCircuits
+     Df.selectN
+     (reverseCircuit $ Df.roundrobin |> selectHelperB))
+  |> toDfCircuit dfC
 
 -- | Selects samples from channel /n/ until the predicate holds. The cycle in
 -- which the predicate turns true is included.
@@ -1163,6 +1322,8 @@ selectUntil ::
   ( DfLike dfA
   , DfLike dfB
   , DfLike dfC
+  , FwdPayload dfA ~ BwdPayload dfC
+  , FwdPayload dfB ~ BwdPayload dfC
   , Dom dfA ~ Dom dfB
   , Dom dfA ~ Dom dfC
   , HiddenClockResetEnable (Dom dfA)
@@ -1174,15 +1335,20 @@ selectUntil ::
   (BwdPayload dfA -> Bool) ->
   Circuit (Vec n (Reverse dfA), Reverse dfB) dfC
 selectUntil (dfA, dfB) dfC f
-  =  tupCircuits (vecToDfLikeInp dfA) (dfToDfLikeInp dfB)
-  |> Df.selectUntil f
-  |> dfToDfLikeOtp dfC
+  =  tupCircuits (vecFromDfLike dfA) (fromDfCircuit' dfB)
+  |> selectHelperA
+  |> coerceCircuit
+  (  tupCircuits
+     (Df.selectUntil f)
+     (reverseCircuit $ Df.roundrobin |> selectHelperB))
+  |> toDfCircuit dfC
 
 -- | Copy data of a single DfLike stream to multiple. LHS will only receive
 -- an acknowledgement when all RHS receivers have acknowledged data.
 fanout ::
   ( DfLike dfA
   , DfLike dfB
+  , FwdPayload dfA ~ BwdPayload dfB
   , Dom dfA ~ Dom dfB
   , HiddenClockResetEnable (Dom dfA)
   , BwdPayload dfA ~ FwdPayload dfB
@@ -1193,14 +1359,18 @@ fanout ::
   Vec numB (Proxy dfB, DfLikeParam dfB) ->
   Circuit (Reverse dfA) (Vec numB dfB)
 fanout dfA dfB
-  =  dfToDfLikeInp dfA
-  |> Df.fanout
-  |> vecToDfLikeOtp dfB
+  =  fromDfCircuit' dfA
+  |> coerceCircuit
+  (  tupCircuits
+     Df.fanout
+     (reverseCircuit (Df.roundrobinCollect Df.Parallel)))
+  |> vecToDfLike dfB
 
 -- | Merge data of multiple streams using a user supplied function
 fanin ::
   ( DfLike dfA
   , DfLike dfB
+  , FwdPayload dfA ~ BwdPayload dfB
   , Dom dfA ~ Dom dfB
   , HiddenClockResetEnable (Dom dfA)
   , BwdPayload dfA ~ FwdPayload dfB
@@ -1212,14 +1382,18 @@ fanin ::
   (BwdPayload dfA -> BwdPayload dfA -> BwdPayload dfA) ->
   Circuit (Vec numA (Reverse dfA)) dfB
 fanin dfA dfB f
-  =  vecToDfLikeInp dfA
-  |> Df.fanin f
-  |> dfToDfLikeOtp dfB
+  =  vecFromDfLike dfA
+  |> coerceCircuit
+  (  tupCircuits
+     (Df.fanin f)
+     (reverseCircuit Df.roundrobin))
+  |> toDfCircuit dfB
 
 -- | Merge data of multiple streams using Monoid's '<>'.
 mfanin ::
   ( DfLike dfA
   , DfLike dfB
+  , FwdPayload dfA ~ BwdPayload dfB
   , Dom dfA ~ Dom dfB
   , HiddenClockResetEnable (Dom dfA)
   , BwdPayload dfA ~ FwdPayload dfB
@@ -1231,14 +1405,18 @@ mfanin ::
   (Proxy dfB, DfLikeParam dfB) ->
   Circuit (Vec numA (Reverse dfA)) dfB
 mfanin dfA dfB
-  =  vecToDfLikeInp dfA
-  |> Df.mfanin
-  |> dfToDfLikeOtp dfB
+  =  vecFromDfLike dfA
+  |> coerceCircuit
+  (  tupCircuits
+     Df.mfanin
+     (reverseCircuit Df.roundrobin))
+  |> toDfCircuit dfB
 
 -- | Bundle a vector of DfLike streams into one.
 bundleVec ::
   ( DfLike dfA
   , DfLike dfB
+  , FwdPayload dfA ~ BwdPayload dfB
   , Dom dfA ~ Dom dfB
   , HiddenClockResetEnable (Dom dfA)
   , Vec n (BwdPayload dfA) ~ FwdPayload dfB
@@ -1248,27 +1426,34 @@ bundleVec ::
   (Proxy dfB, DfLikeParam dfB) ->
   Circuit (Vec n (Reverse dfA)) dfB
 bundleVec dfA dfB
-  =  vecToDfLikeInp dfA
-  |> Df.bundleVec
-  |> dfToDfLikeOtp dfB
+  =  vecFromDfLike dfA
+  |> coerceCircuit
+  (  tupCircuits
+     Df.bundleVec
+     (reverseCircuit Df.roundrobin))
+  |> toDfCircuit dfB
 
 -- | Split up a DfLike stream of a vector into multiple independent DfLike streams.
 unbundleVec ::
   ( DfLike dfA
   , DfLike dfB
+  , FwdPayload dfA ~ BwdPayload dfB
   , Dom dfA ~ Dom dfB
   , HiddenClockResetEnable (Dom dfA)
   , BwdPayload dfA ~ Vec n (FwdPayload dfB)
   , NFDataX (FwdPayload dfB)
   , KnownNat n
-  , n ~ (decN + 1) ) =>
+  , 1 <= n ) =>
   (Proxy dfA, DfLikeParam dfA) ->
   Vec n (Proxy dfB, DfLikeParam dfB) ->
   Circuit (Reverse dfA) (Vec n dfB)
 unbundleVec dfA dfB
-  =  dfToDfLikeInp dfA
-  |> Df.unbundleVec
-  |> vecToDfLikeOtp dfB
+  =  fromDfCircuit' dfA
+  |> coerceCircuit
+  (  tupCircuits
+     Df.unbundleVec
+     (reverseCircuit (Df.roundrobinCollect Df.Parallel)))
+  |> vecToDfLike dfB
 
 -- | Distribute data across multiple components on the RHS. Useful if you want
 -- to parallelize a workload across multiple (slow) workers. For optimal
@@ -1276,6 +1461,7 @@ unbundleVec dfA dfB
 roundrobin ::
   ( DfLike dfA
   , DfLike dfB
+  , FwdPayload dfA ~ BwdPayload dfB
   , Dom dfA ~ Dom dfB
   , HiddenClockResetEnable (Dom dfA)
   , BwdPayload dfA ~ FwdPayload dfB
@@ -1285,15 +1471,19 @@ roundrobin ::
   Vec n (Proxy dfB, DfLikeParam dfB) ->
   Circuit (Reverse dfA) (Vec n dfB)
 roundrobin dfA dfB
-  =  dfToDfLikeInp dfA
-  |> Df.roundrobin
-  |> vecToDfLikeOtp dfB
+  =  fromDfCircuit' dfA
+  |> coerceCircuit
+  (  tupCircuits
+     Df.roundrobin
+     (reverseCircuit (Df.roundrobinCollect Df.Parallel)))
+  |> vecToDfLike dfB
 
 -- | Opposite of 'roundrobin'. Useful to collect data from workers that only
 -- produce a result with an interval of /n/ cycles.
 roundrobinCollect ::
   ( DfLike dfA
   , DfLike dfB
+  , FwdPayload dfA ~ BwdPayload dfB
   , Dom dfA ~ Dom dfB
   , HiddenClockResetEnable (Dom dfA)
   , BwdPayload dfA ~ FwdPayload dfB
@@ -1304,14 +1494,18 @@ roundrobinCollect ::
   Df.CollectMode ->
   Circuit (Vec n (Reverse dfA)) dfB
 roundrobinCollect dfA dfB mode
-  =  vecToDfLikeInp dfA
-  |> Df.roundrobinCollect mode
-  |> dfToDfLikeOtp dfB
+  =  vecFromDfLike dfA
+  |> coerceCircuit
+  (  tupCircuits
+     (Df.roundrobinCollect mode)
+     (reverseCircuit Df.roundrobin))
+  |> toDfCircuit dfB
 
 -- | Place register on /forward/ part of a circuit.
 registerFwd ::
   ( DfLike dfA
   , DfLike dfB
+  , FwdPayload dfA ~ BwdPayload dfB
   , Dom dfA ~ Dom dfB
   , HiddenClockResetEnable (Dom dfA)
   , BwdPayload dfA ~ FwdPayload dfB
@@ -1320,15 +1514,16 @@ registerFwd ::
   (Proxy dfB, DfLikeParam dfB) ->
   Circuit (Reverse dfA) dfB
 registerFwd dfA dfB
-  =  dfToDfLikeInp dfA
-  |> Df.registerFwd
-  |> dfToDfLikeOtp dfB
+  =  fromDfCircuit' dfA
+  |> tupCircuits (Df.registerFwd) idC
+  |> toDfCircuit dfB
 
 -- | Place register on /backward/ part of a circuit. This is implemented using a
 -- in-logic two-element shift register.
 registerBwd ::
   ( DfLike dfA
   , DfLike dfB
+  , FwdPayload dfA ~ BwdPayload dfB
   , Dom dfA ~ Dom dfB
   , HiddenClockResetEnable (Dom dfA)
   , BwdPayload dfA ~ FwdPayload dfB
@@ -1337,15 +1532,16 @@ registerBwd ::
   (Proxy dfB, DfLikeParam dfB) ->
   Circuit (Reverse dfA) dfB
 registerBwd dfA dfB
-  =  dfToDfLikeInp dfA
-  |> Df.registerBwd
-  |> dfToDfLikeOtp dfB
+  =  fromDfCircuit' dfA
+  |> tupCircuits (Df.registerBwd) idC
+  |> toDfCircuit dfB
 
 -- | A fifo buffer with user-provided depth.
 -- Uses blockram to store data
 fifo ::
   ( DfLike dfA
   , DfLike dfB
+  , FwdPayload dfA ~ BwdPayload dfB
   , Dom dfA ~ Dom dfB
   , HiddenClockResetEnable (Dom dfA)
   , KnownNat depth
@@ -1355,10 +1551,10 @@ fifo ::
   (Proxy dfB, DfLikeParam dfB) ->
   SNat depth ->
   Circuit (Reverse dfA) dfB
-fifo argsA argsB fifoDepth
-  =  dfToDfLikeInp argsA
-  |> Df.fifo fifoDepth
-  |> dfToDfLikeOtp argsB where
+fifo dfA dfB fifoDepth
+  =  fromDfCircuit' dfA
+  |> tupCircuits (Df.fifo fifoDepth) idC
+  |> toDfCircuit dfB where
 
 -- | Emit values given in list. Emits no data while reset is asserted. Not
 -- synthesizable.
