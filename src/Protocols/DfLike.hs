@@ -32,7 +32,6 @@ module Protocols.DfLike
 
     -- * Helper functions
   , fromDfCircuit
-  , fromDfCircuit'
   , toDfCircuitHelper
 
     -- * Associated with Axi4 instance
@@ -46,10 +45,6 @@ module Protocols.DfLike
     -- * Utilities to use DfLike one-way
   , dfToDfLikeInp
   , dfToDfLikeOtp
-  , vecToDfLikeInp
-  , vecToDfLikeOtp
-  , tupToDfLikeInp
-  , tupToDfLikeOtp
 
     -- * Df functions generalized to Dflike
   , const, void, pure
@@ -219,19 +214,8 @@ fromDfCircuit
   :: (DfLike df, HiddenClockResetEnable (Dom df))
   => (Proxy df, DfLikeParam df)
   -> Circuit (Reverse df)
-             (Reverse (Df (Dom df) (FwdPayload df)), Df (Dom df) (BwdPayload df))
-fromDfCircuit = coerceCircuit . reverseCircuit . toDfCircuit
-
--- | 'toDfCircuit', but 'Df' is on the other side.
--- 'BwdPayload' remains the input data,
--- and 'FwdPayload' remains the output data.
--- All the functionality from 'toDfCircuit' is preserved.
-fromDfCircuit'
-  :: (DfLike df, HiddenClockResetEnable (Dom df))
-  => (Proxy df, DfLikeParam df)
-  -> Circuit (Reverse df)
              (Df (Dom df) (BwdPayload df), Reverse (Df (Dom df) (FwdPayload df)))
-fromDfCircuit' = mapCircuit id id swap swap . fromDfCircuit
+fromDfCircuit = mapCircuit id id swap swap . reverseCircuit . toDfCircuit
 
 -- | Helper function to make it easier to implement 'DfLike'.
 -- 'Ack's are automatically converted to/from 'Bool's,
@@ -287,6 +271,9 @@ instance (NFDataX dat) => DfLike (Df dom dat) where
 
 
 -- DfLike classes for Axi4
+
+-- TODO maybe a subordinate thing that only responds to certain addresses and filters out the rest
+-- TODO burst size is more important than we're making it out to be
 
 -- | Data carried along 'Axi4WriteAddress' channel which is put in control of the user,
 -- rather than being managed by the 'DfLike' instances.
@@ -447,6 +434,7 @@ axi4ReadAddrMsgFromReadAddrInfo _arlen _arsize _arburst Axi4ReadAddressInfo{..}
 
 -- Fifo classes for Axi4 subordinate port
 
+-- TODO if reading and have big burst size, should notify each time
 
 -- Does not support burst modes other than fixed.
 instance
@@ -644,6 +632,7 @@ instance
 
 -- Fifo classes for Axi4 manager port
 
+-- TODO let user choose burst size
 instance
   ( GoodAxi4WriteAddressConfig confAW
   , GoodAxi4WriteDataConfig confW
@@ -804,7 +793,7 @@ dfToDfLikeInp
   => HiddenClockResetEnable (Dom df)
   => (Proxy df, DfLikeParam df)
   -> Circuit (Reverse df) (Df (Dom df) (BwdPayload df))
-dfToDfLikeInp = mapCircuit id id P.snd (P.pure NoData, ) . fromDfCircuit
+dfToDfLikeInp = mapCircuit id id P.fst (, P.pure NoData) . fromDfCircuit
 
 -- | Convert 'DfLike' into a /one-way/ 'Df' port,
 -- at the data output end
@@ -815,26 +804,7 @@ dfToDfLikeOtp
   -> Circuit (Df (Dom df) (FwdPayload df)) df
 dfToDfLikeOtp = mapCircuit (, P.pure (Ack False)) P.fst id id . toDfCircuit
 
--- | Convert a vec of 'DfLike's into a vec of /one-way/ 'Df' ports,
--- at the data input end
-vecToDfLikeInp
-  :: DfLike df
-  => HiddenClockResetEnable (Dom df)
-  => KnownNat n
-  => Vec n (Proxy df, DfLikeParam df)
-  -> Circuit (Vec n (Reverse df)) (Vec n (Df (Dom df) (BwdPayload df)))
-vecToDfLikeInp = vecCircuits . fmap dfToDfLikeInp
-
--- | Convert a vec of 'DfLike's into a vec of /one-way/ 'Df' ports,
--- at the data output end
-vecToDfLikeOtp
-  :: DfLike df
-  => HiddenClockResetEnable (Dom df)
-  => KnownNat n
-  => Vec n (Proxy df, DfLikeParam df)
-  -> Circuit (Vec n (Df (Dom df) (FwdPayload df))) (Vec n df)
-vecToDfLikeOtp = vecCircuits . fmap dfToDfLikeOtp
-
+-- TODO comment
 vecToDfLike
   :: DfLike df
   => HiddenClockResetEnable (Dom df)
@@ -843,40 +813,16 @@ vecToDfLike
   -> Circuit (Vec n (Df (Dom df) (FwdPayload df)), Vec n (Reverse (Df (Dom df) (BwdPayload df)))) (Vec n df)
 vecToDfLike params = mapCircuit (uncurry C.zip) unzip id id $ vecCircuits $ toDfCircuit <$> params
 
+-- TODO comment
 vecFromDfLike
   :: DfLike df
   => HiddenClockResetEnable (Dom df)
   => KnownNat n
   => Vec n (Proxy df, DfLikeParam df)
   -> Circuit (Vec n (Reverse df)) (Vec n (Df (Dom df) (BwdPayload df)), Vec n (Reverse (Df (Dom df) (FwdPayload df))))
-vecFromDfLike params = mapCircuit id id unzip (uncurry C.zip) $ vecCircuits $ fromDfCircuit' <$> params
+vecFromDfLike params = mapCircuit id id unzip (uncurry C.zip) $ vecCircuits $ fromDfCircuit <$> params
 
--- | Convert a pair of (possibly different from each other) 'DfLike's
--- into a pair of /one-way/ 'Df' ports, at the data input end
-tupToDfLikeInp
-  :: DfLike dfA
-  => DfLike dfB
-  => Dom dfA ~ Dom dfB
-  => HiddenClockResetEnable (Dom dfA)
-  => ((Proxy dfA, DfLikeParam dfA), (Proxy dfB, DfLikeParam dfB))
-  -> Circuit (Reverse (dfA, dfB))
-             (Df (Dom dfA) (BwdPayload dfA), Df (Dom dfB) (BwdPayload dfB))
-tupToDfLikeInp (argsA, argsB) = coerceCircuit
-                              $ tupCircuits (dfToDfLikeInp argsA) (dfToDfLikeInp argsB)
-
--- | Convert a pair of (possibly different from each other) 'DfLike's
--- into a pair of /one-way/ 'Df' ports, at the data output end
-tupToDfLikeOtp
-  :: DfLike dfA
-  => DfLike dfB
-  => Dom dfA ~ Dom dfB
-  => HiddenClockResetEnable (Dom dfA)
-  => ((Proxy dfA, DfLikeParam dfA), (Proxy dfB, DfLikeParam dfB))
-  -> Circuit (Df (Dom dfA) (FwdPayload dfA), Df (Dom dfB) (FwdPayload dfB))
-             (dfA, dfB)
-tupToDfLikeOtp (argsA, argsB) = coerceCircuit
-                              $ tupCircuits (dfToDfLikeOtp argsA) (dfToDfLikeOtp argsB)
-
+-- TODO comment
 tupToDfLike
   :: DfLike dfA
   => DfLike dfB
@@ -888,6 +834,7 @@ tupToDfLike
 tupToDfLike (argsA, argsB) = mapCircuit f f id id $ tupCircuits (toDfCircuit argsA) (toDfCircuit argsB) where
   f ((a,b),(c,d)) = ((a,c),(b,d))
 
+-- TODO comment
 tupFromDfLike
   :: DfLike dfA
   => DfLike dfB
@@ -896,10 +843,10 @@ tupFromDfLike
   => ((Proxy dfA, DfLikeParam dfA), (Proxy dfB, DfLikeParam dfB))
   -> Circuit (Reverse (dfA, dfB))
              ((Df (Dom dfA) (BwdPayload dfA), Df (Dom dfB) (BwdPayload dfB)), (Reverse (Df (Dom dfA) (FwdPayload dfA)), Reverse (Df (Dom dfB) (FwdPayload dfB))))
-tupFromDfLike (argsA, argsB) = mapCircuit id id f g $ tupCircuits (fromDfCircuit argsA) (fromDfCircuit argsB) where
-  f ((a,b),(c,d)) = ((b,d),(a,c))
-  g ((a,b),(c,d)) = ((c,a),(d,b))
+tupFromDfLike (argsA, argsB) = mapCircuit id id f f $ tupCircuits (fromDfCircuit argsA) (fromDfCircuit argsB) where
+  f ((a,b),(c,d)) = ((a,c),(b,d))
 
+-- TODO comment
 tupToVec :: Circuit (a,a) (Vec 2 a)
 tupToVec = Circuit ((f *** g) . swap) where
   f :: Vec 2 p -> (p,p)
@@ -907,6 +854,7 @@ tupToVec = Circuit ((f *** g) . swap) where
   f _ = undefined -- to suppress warning
   g (x,y) = x :> y :> Nil
 
+-- TODO comment
 vecToTup :: Circuit (Vec 2 a) (a,a)
 vecToTup = Circuit ((g *** f) . swap) where
   f :: Vec 2 p -> (p,p)
@@ -927,7 +875,7 @@ map ::
   (BwdPayload dfA -> FwdPayload dfB) ->
   Circuit (Reverse dfA) dfB
 map dfA dfB f
-  =  fromDfCircuit' dfA
+  =  fromDfCircuit dfA
   |> tupCircuits (Df.map f) idC
   |> toDfCircuit dfB
 
@@ -944,7 +892,7 @@ fst ::
   (Proxy dfB, DfLikeParam dfB) ->
   Circuit (Reverse dfA) dfB
 fst dfA dfB
-  =  fromDfCircuit' dfA
+  =  fromDfCircuit dfA
   |> tupCircuits Df.fst idC
   |> toDfCircuit dfB
 
@@ -961,7 +909,7 @@ snd ::
   (Proxy dfB, DfLikeParam dfB) ->
   Circuit (Reverse dfA) dfB
 snd dfA dfB
-  =  fromDfCircuit' dfA
+  =  fromDfCircuit dfA
   |> tupCircuits Df.snd idC
   |> toDfCircuit dfB
 
@@ -981,7 +929,7 @@ bimap ::
   (c -> d) ->
   Circuit (Reverse dfA) dfB
 bimap dfA dfB f g
-  =  fromDfCircuit' dfA
+  =  fromDfCircuit dfA
   |> tupCircuits (Df.bimap f g) idC
   |> toDfCircuit dfB
 
@@ -1000,7 +948,7 @@ first ::
   (a -> b) ->
   Circuit (Reverse dfA) dfB
 first dfA dfB f
-  =  fromDfCircuit' dfA
+  =  fromDfCircuit dfA
   |> tupCircuits (Df.first f) idC
   |> toDfCircuit dfB
 
@@ -1019,7 +967,7 @@ second ::
   (b -> c) ->
   Circuit (Reverse dfA) dfB
 second dfA dfB f
-  =  fromDfCircuit' dfA
+  =  fromDfCircuit dfA
   |> tupCircuits (Df.second f) idC
   |> toDfCircuit dfB
 
@@ -1035,7 +983,7 @@ const ::
   FwdPayload dfB ->
   Circuit (Reverse dfA) dfB
 const dfA dfB b
-  =  fromDfCircuit' dfA
+  =  fromDfCircuit dfA
   |> tupCircuits (Df.const b) idC
   |> toDfCircuit dfB
 
@@ -1071,7 +1019,7 @@ catMaybes ::
   (Proxy dfB, DfLikeParam dfB) ->
   Circuit (Reverse dfA) dfB
 catMaybes dfA dfB
-  =  fromDfCircuit' dfA
+  =  fromDfCircuit dfA
   |> tupCircuits (Df.catMaybes) idC
   |> toDfCircuit dfB
 
@@ -1088,7 +1036,7 @@ mapMaybe ::
   (BwdPayload dfA -> Maybe (FwdPayload dfB)) ->
   Circuit (Reverse dfA) dfB
 mapMaybe dfA dfB f
-  =  fromDfCircuit' dfA
+  =  fromDfCircuit dfA
   |> tupCircuits (Df.mapMaybe f) idC
   |> toDfCircuit dfB
 
@@ -1105,7 +1053,7 @@ filter ::
   (BwdPayload dfA -> Bool) ->
   Circuit (Reverse dfA) dfB
 filter dfA dfB f
-  =  fromDfCircuit' dfA
+  =  fromDfCircuit dfA
   |> tupCircuits (Df.filter f) idC
   |> toDfCircuit dfB
 
@@ -1123,7 +1071,7 @@ mapLeft ::
   (a -> b) ->
   Circuit (Reverse dfA) dfB
 mapLeft dfA dfB f
-  =  fromDfCircuit' dfA
+  =  fromDfCircuit dfA
   |> tupCircuits (Df.mapLeft f) idC
   |> toDfCircuit dfB
 
@@ -1141,7 +1089,7 @@ mapRight ::
   (b -> c) ->
   Circuit (Reverse dfA) dfB
 mapRight dfA dfB f
-  =  fromDfCircuit' dfA
+  =  fromDfCircuit dfA
   |> tupCircuits (Df.mapRight f) idC
   |> toDfCircuit dfB
 
@@ -1159,7 +1107,7 @@ either ::
   (b -> FwdPayload dfB) ->
   Circuit (Reverse dfA) dfB
 either dfA dfB f g
-  =  fromDfCircuit' dfA
+  =  fromDfCircuit dfA
   |> tupCircuits (Df.either f g) idC
   |> toDfCircuit dfB
 
@@ -1224,7 +1172,7 @@ partition ::
   (BwdPayload dfA -> Bool) ->
   Circuit (Reverse dfA) (dfB, dfC)
 partition dfA dfBC f
-  =  fromDfCircuit' dfA
+  =  fromDfCircuit dfA
   |> coerceCircuit
   (  tupCircuits
      (Df.partition f)
@@ -1245,7 +1193,7 @@ route ::
   Vec n (Proxy dfB, DfLikeParam dfB) ->
   Circuit (Reverse dfA) (Vec n dfB)
 route dfA dfB
-  =  fromDfCircuit' dfA
+  =  fromDfCircuit dfA
   |> coerceCircuit
   (  tupCircuits
      Df.route
@@ -1282,7 +1230,7 @@ select ::
   (Proxy dfC, DfLikeParam dfC) ->
   Circuit (Vec n (Reverse dfA), Reverse dfB) dfC
 select (dfA, dfB) dfC
-  =  tupCircuits (vecFromDfLike dfA) (fromDfCircuit' dfB)
+  =  tupCircuits (vecFromDfLike dfA) (fromDfCircuit dfB)
   |> selectHelperA
   |> coerceCircuit
   (  tupCircuits
@@ -1308,7 +1256,7 @@ selectN ::
   (Proxy dfC, DfLikeParam dfC) ->
   Circuit (Vec n (Reverse dfA), Reverse dfB) dfC
 selectN (dfA, dfB) dfC
-  =  tupCircuits (vecFromDfLike dfA) (fromDfCircuit' dfB)
+  =  tupCircuits (vecFromDfLike dfA) (fromDfCircuit dfB)
   |> selectHelperA
   |> coerceCircuit
   (  tupCircuits
@@ -1335,7 +1283,7 @@ selectUntil ::
   (BwdPayload dfA -> Bool) ->
   Circuit (Vec n (Reverse dfA), Reverse dfB) dfC
 selectUntil (dfA, dfB) dfC f
-  =  tupCircuits (vecFromDfLike dfA) (fromDfCircuit' dfB)
+  =  tupCircuits (vecFromDfLike dfA) (fromDfCircuit dfB)
   |> selectHelperA
   |> coerceCircuit
   (  tupCircuits
@@ -1359,7 +1307,7 @@ fanout ::
   Vec numB (Proxy dfB, DfLikeParam dfB) ->
   Circuit (Reverse dfA) (Vec numB dfB)
 fanout dfA dfB
-  =  fromDfCircuit' dfA
+  =  fromDfCircuit dfA
   |> coerceCircuit
   (  tupCircuits
      Df.fanout
@@ -1448,7 +1396,7 @@ unbundleVec ::
   Vec n (Proxy dfB, DfLikeParam dfB) ->
   Circuit (Reverse dfA) (Vec n dfB)
 unbundleVec dfA dfB
-  =  fromDfCircuit' dfA
+  =  fromDfCircuit dfA
   |> coerceCircuit
   (  tupCircuits
      Df.unbundleVec
@@ -1471,7 +1419,7 @@ roundrobin ::
   Vec n (Proxy dfB, DfLikeParam dfB) ->
   Circuit (Reverse dfA) (Vec n dfB)
 roundrobin dfA dfB
-  =  fromDfCircuit' dfA
+  =  fromDfCircuit dfA
   |> coerceCircuit
   (  tupCircuits
      Df.roundrobin
@@ -1514,7 +1462,7 @@ registerFwd ::
   (Proxy dfB, DfLikeParam dfB) ->
   Circuit (Reverse dfA) dfB
 registerFwd dfA dfB
-  =  fromDfCircuit' dfA
+  =  fromDfCircuit dfA
   |> tupCircuits (Df.registerFwd) idC
   |> toDfCircuit dfB
 
@@ -1532,10 +1480,11 @@ registerBwd ::
   (Proxy dfB, DfLikeParam dfB) ->
   Circuit (Reverse dfA) dfB
 registerBwd dfA dfB
-  =  fromDfCircuit' dfA
+  =  fromDfCircuit dfA
   |> tupCircuits (Df.registerBwd) idC
   |> toDfCircuit dfB
 
+-- TODO maybe status info??
 -- | A fifo buffer with user-provided depth.
 -- Uses blockram to store data
 fifo ::
@@ -1552,7 +1501,7 @@ fifo ::
   SNat depth ->
   Circuit (Reverse dfA) dfB
 fifo dfA dfB fifoDepth
-  =  fromDfCircuit' dfA
+  =  fromDfCircuit dfA
   |> tupCircuits (Df.fifo fifoDepth) idC
   |> toDfCircuit dfB where
 
