@@ -47,6 +47,7 @@ module Protocols.DfLike
   , dfToDfLikeOtp
 
     -- * Df functions generalized to Dflike
+  , convert
   , const, void, pure
   , map, bimap
   , fst, snd
@@ -84,12 +85,12 @@ module Protocols.DfLike
 import qualified Prelude as P
 import           Control.Arrow ((***))
 import           Control.Monad (when)
-import           Control.Monad.State (State, runState, get, put, gets, modify)
+import           Control.Monad.State (State, runState, get, put)
 import           Clash.Prelude hiding
                    (map, fst, snd, zipWith, const, pure, filter, either, zip, select, sample, simulate)
 import qualified Clash.Prelude as C
 import qualified Data.Bifunctor as B
-import           Data.Maybe (fromMaybe, isJust)
+import           Data.Maybe (fromMaybe, isNothing)
 import           Data.Proxy (Proxy(..))
 import           Data.Tuple (swap)
 import           GHC.Stack (HasCallStack)
@@ -165,10 +166,10 @@ class (Protocol df) => DfLike df where
 -- Using 'ImplicitInfo' we can put in default values for extraneous info
 -- and only deal with the important data (see 'ImplicitInfo' and instances below).
 class (DfLike df) => ImplicitInfoClass df where
-  -- | The "important" parts of @FwdPayload df@
-  type ImplicitInfoFwdPayload df
   -- | The "important" parts of @BwdPayload df@
   type ImplicitInfoBwdPayload df
+  -- | The "important" parts of @FwdPayload df@
+  type ImplicitInfoFwdPayload df
   -- | Parameter given to 'mapFwd', typically a bunch of default values.
   type ImplicitInfoFwdParam df
   -- | Add on "unimportant" default values to 'ImplicitInfoFwdPayload' to get 'FwdPayload'
@@ -177,8 +178,8 @@ class (DfLike df) => ImplicitInfoClass df where
   mapBwd :: Proxy df -> BwdPayload df -> ImplicitInfoBwdPayload df
 
   -- defaults
-  type ImplicitInfoFwdPayload df = ()
   type ImplicitInfoBwdPayload df = ()
+  type ImplicitInfoFwdPayload df = ()
   type ImplicitInfoFwdParam df = ()
 
 -- | Wrapper for protocols whose DfLike implementation contains
@@ -195,8 +196,8 @@ instance (Protocol df) => Protocol (ImplicitInfo df) where
 -- The important part to note here is 'FwdPayload' and 'BwdPayload'.
 instance (ImplicitInfoClass df) => DfLike (ImplicitInfo df) where
   type Dom (ImplicitInfo df) = Dom df
-  type FwdPayload (ImplicitInfo df) = ImplicitInfoFwdPayload df
   type BwdPayload (ImplicitInfo df) = ImplicitInfoBwdPayload df
+  type FwdPayload (ImplicitInfo df) = ImplicitInfoFwdPayload df
   type DfLikeParam (ImplicitInfo df) = (ImplicitInfoFwdParam df, DfLikeParam df)
   toDfCircuit (_, (fwdParam, dfParam)) =
     let pxy = Proxy :: Proxy df
@@ -272,9 +273,6 @@ instance (NFDataX dat) => DfLike (Df dom dat) where
 
 -- DfLike classes for Axi4
 
--- TODO maybe a subordinate thing that only responds to certain addresses and filters out the rest
--- TODO burst size is more important than we're making it out to be
-
 -- | Data carried along 'Axi4WriteAddress' channel which is put in control of the user,
 -- rather than being managed by the 'DfLike' instances.
 -- Matches up one-to-one with the fields of 'M2S_WriteAddress' except for
@@ -290,6 +288,9 @@ data Axi4WriteAddressInfo (conf :: Axi4WriteAddressConfig) (userType :: Type)
 
     -- | Region
   , _awiregion :: !(RegionType (AWKeepRegion conf))
+
+    -- | Burst size
+  , _awisize :: !(SizeType (AWKeepSize conf))
 
     -- | Lock type
   , _awilock :: !(LockType (AWKeepLock conf))
@@ -326,6 +327,7 @@ axi4WriteAddrMsgToWriteAddrInfo M2S_WriteAddress{..}
   { _awiid     = _awid
   , _awiaddr   = _awaddr
   , _awiregion = _awregion
+  , _awisize   = _awsize
   , _awilock   = _awlock
   , _awicache  = _awcache
   , _awiprot   = _awprot
@@ -336,21 +338,21 @@ axi4WriteAddrMsgToWriteAddrInfo M2S_WriteAddress{..}
 -- | Convert 'Axi4WriteAddressInfo' to 'M2S_WriteAddress', adding some info
 axi4WriteAddrMsgFromWriteAddrInfo
   :: BurstLengthType (AWKeepBurstLength conf)
-  -> SizeType (AWKeepSize conf)
   -> BurstType (AWKeepBurst conf)
   -> Axi4WriteAddressInfo conf userType
   -> M2S_WriteAddress conf userType
-axi4WriteAddrMsgFromWriteAddrInfo _awlen _awsize _awburst Axi4WriteAddressInfo{..}
+axi4WriteAddrMsgFromWriteAddrInfo _awlen _awburst Axi4WriteAddressInfo{..}
   = M2S_WriteAddress
   { _awid     = _awiid
   , _awaddr   = _awiaddr
   , _awregion = _awiregion
+  , _awsize   = _awisize
   , _awlock   = _awilock
   , _awcache  = _awicache
   , _awprot   = _awiprot
   , _awqos    = _awiqos
   , _awuser   = _awiuser
-  , _awlen, _awsize, _awburst
+  , _awlen, _awburst
   }
 
 
@@ -368,6 +370,15 @@ data Axi4ReadAddressInfo (conf :: Axi4ReadAddressConfig) (userType :: Type)
 
     -- | Region
   , _ariregion :: !(RegionType (ARKeepRegion conf))
+
+    -- | Burst length
+  , _arilen :: !(BurstLengthType (ARKeepBurstLength conf))
+
+    -- | Burst size
+  , _arisize :: !(SizeType (ARKeepSize conf))
+
+    -- | Burst type
+  , _ariburst :: !(BurstType (ARKeepBurst conf))
 
     -- | Lock type
   , _arilock :: !(LockType (ARKeepLock conf))
@@ -404,6 +415,9 @@ axi4ReadAddrMsgToReadAddrInfo M2S_ReadAddress{..}
   { _ariid     = _arid
   , _ariaddr   = _araddr
   , _ariregion = _arregion
+  , _arilen    = _arlen
+  , _arisize   = _arsize
+  , _ariburst  = _arburst
   , _arilock   = _arlock
   , _aricache  = _arcache
   , _ariprot   = _arprot
@@ -413,28 +427,24 @@ axi4ReadAddrMsgToReadAddrInfo M2S_ReadAddress{..}
 
 -- | Convert 'Axi4ReadAddressInfo' to 'M2S_ReadAddress', adding some info
 axi4ReadAddrMsgFromReadAddrInfo
-  :: BurstLengthType (ARKeepBurstLength conf)
-  -> SizeType (ARKeepSize conf)
-  -> BurstType (ARKeepBurst conf)
-  -> Axi4ReadAddressInfo conf userType
-  -> M2S_ReadAddress conf userType
-axi4ReadAddrMsgFromReadAddrInfo _arlen _arsize _arburst Axi4ReadAddressInfo{..}
+  :: Axi4ReadAddressInfo conf userType -> M2S_ReadAddress conf userType
+axi4ReadAddrMsgFromReadAddrInfo Axi4ReadAddressInfo{..}
   = M2S_ReadAddress
   { _arid     = _ariid
   , _araddr   = _ariaddr
   , _arregion = _ariregion
+  , _arlen    = _arilen
+  , _arsize   = _arisize
+  , _arburst  = _ariburst
   , _arlock   = _arilock
   , _arcache  = _aricache
   , _arprot   = _ariprot
   , _arqos    = _ariqos
   , _aruser   = _ariuser
-  , _arlen, _arsize, _arburst
   }
 
 
 -- Fifo classes for Axi4 subordinate port
-
--- TODO if reading and have big burst size, should notify each time
 
 -- Does not support burst modes other than fixed.
 instance
@@ -459,14 +469,19 @@ instance
     (Reverse (Axi4WriteAddress dom confAW userAW),
      Reverse (Axi4WriteData dom confW userW),
      Axi4WriteResponse dom confB userB)
-    = (Axi4WriteAddressInfo confAW userAW, StrictStrobeType (WNBytes confW) (WKeepStrobe confW), userW)
+    = ( Axi4WriteAddressInfo confAW userAW
+      , BurstLengthType (AWKeepBurstLength confAW)
+      , BurstType (AWKeepBurst confAW)
+      , StrictStrobeType (WNBytes confW) (WKeepStrobe confW)
+      , userW )
   type FwdPayload
     (Reverse (Axi4WriteAddress dom confAW userAW),
      Reverse (Axi4WriteData dom confW userW),
      Axi4WriteResponse dom confB userB)
-    = Maybe (ResponseType (BKeepResponse confB), userB)
+    = (ResponseType (BKeepResponse confB), userB)
 
   toDfCircuit _ = toDfCircuitHelper s0 blankOtp stateFn where
+    -- (info about write address given most recently, ID to send write response to)
     s0 = (Nothing, Nothing)
 
     blankOtp = ( S2M_WriteAddress{_awready = False}
@@ -476,42 +491,36 @@ instance
     stateFn (wAddrVal, wDataVal, wRespAck) dfAckIn dfDatIn = do
       wAddrAck <- processWAddr wAddrVal
       (wDataAck, dfDatOut) <- processWData wDataVal dfAckIn
-      wRespVal <- sendWResp wRespAck dfDatIn
-      let dfAckOut = _bready wRespAck
+      (wRespVal, dfAckOut) <- sendWResp wRespAck dfDatIn
       P.pure ((wAddrAck, wDataAck, wRespVal), dfDatOut, dfAckOut)
 
     processWAddr M2S_NoWriteAddress = P.pure (S2M_WriteAddress{_awready = False})
-    processWAddr msg
-      | maybe True (/= BmFixed) (fromKeepType $ _awburst msg) = P.pure (S2M_WriteAddress{_awready = True})
-      | otherwise = do
-         (_,b) <- get
-         put (Just (axi4WriteAddrMsgToWriteAddrInfo msg), b)
-         P.pure (S2M_WriteAddress{_awready = True})
+    processWAddr msg = do
+      (writingInfo,b) <- get
+      when (isNothing writingInfo) $
+        put (Just (axi4WriteAddrMsgToWriteAddrInfo msg, _awlen msg, _awburst msg), b)
+      P.pure (S2M_WriteAddress{_awready = True})
 
     processWData M2S_NoWriteData _ = P.pure (S2M_WriteData{_wready = False}, Nothing)
     processWData M2S_WriteData{_wlast, _wdata, _wuser} dfAckIn = do
-      (writingID,respID) <- get
-      -- we only want to output _wready = false
-      --   if we're the recpient of the writes AND dfAckIn is false
-      -- we only want to return data if we're the recpient of the writes
-      -- we only want to output on writeresponse
-      --   if we're the recipient of the writes AND dfAckIn is true
-      case (writingID, dfAckIn) of
-        (Nothing, _) -> P.pure (S2M_WriteData{_wready = True}, Nothing)
-        (Just info, False) -> P.pure (S2M_WriteData{_wready = False}, Just (info, _wdata, _wuser))
-        (Just info, True) -> do
-          put (Nothing,
-               if _wlast
-               then Just (_awiid info)
-               else respID)
-          P.pure (S2M_WriteData{_wready = True}, Just (info, _wdata, _wuser))
+      (writingInfo,respID) <- get
+      case writingInfo of
+        Nothing -> P.pure (S2M_WriteData{_wready = False}, Nothing)
+        Just (info, len, burst) -> do
+          when dfAckIn $ put (Nothing,
+                              if _wlast
+                              then Just (_awiid info)
+                              else respID)
+          P.pure ( S2M_WriteData{_wready = dfAckIn}
+                 , Just (info, len, burst, _wdata, _wuser))
 
     sendWResp wRespAck dfDatIn = do
-      respID <- gets P.snd
-      when (_bready wRespAck || isJust dfDatIn) $ modify (\(a, _) -> (a, Nothing))
-      P.pure $ case (respID, dfDatIn) of
-        (Just _bid, Just (Just (_bresp, _buser))) -> S2M_WriteResponse{..}
-        _ -> S2M_NoWriteResponse
+      (a, respID) <- get
+      let (wRespVal, dfAckOut) = case (respID, dfDatIn) of
+            (Just _bid, Just (_bresp, _buser)) -> (S2M_WriteResponse{..}, _bready wRespAck)
+            _ -> (S2M_NoWriteResponse, False)
+      when dfAckOut $ put (a, Nothing)
+      P.pure (wRespVal, dfAckOut)
 
 instance
   ( GoodAxi4WriteAddressConfig confAW
@@ -536,10 +545,10 @@ instance
     (Reverse (Axi4WriteAddress dom confAW userAW),
      Reverse (Axi4WriteData dom confW userW),
      Axi4WriteResponse dom confB userB)
-    = Maybe (ResponseType (BKeepResponse confB), userB)
+    = (ResponseType (BKeepResponse confB), userB)
 
+  mapBwd _ (_, _, _, a, _) = a
   mapFwd (_, a) () = a
-  mapBwd _ (_, a, _) = a
 
 instance
   ( GoodAxi4ReadAddressConfig confAR
@@ -556,7 +565,7 @@ instance
     (Reverse (Axi4ReadAddress dom confAR userAR),
      Axi4ReadData dom confR userR dat)
      = dom
-  type BwdPayload
+  type BwdPayload -- sent at the beginning of each burst (NOT each transfer)
     (Reverse (Axi4ReadAddress dom confAR userAR),
      Axi4ReadData dom confR userR dat)
      = Axi4ReadAddressInfo confAR userAR
@@ -566,44 +575,38 @@ instance
      = (dat, userR, ResponseType (RKeepResponse confR))
 
   toDfCircuit _ = toDfCircuitHelper s0 blankOtp stateFn where
-    s0 =
-      (0,
-       errorX "DfLike for Axi4: No initial value for read id",
-       S2M_NoReadData)
+    -- ( burst len left in transfer
+    -- , read id currently replying to )
+    s0 = (0, errorX "DfLike for Axi4: No initial value for read id" )
 
     blankOtp = (S2M_ReadAddress { _arready = False }, S2M_NoReadData)
 
     stateFn (addrVal, dataAck) dfAckIn dfDatIn = do
       (addrAck, dfDatOut) <- processAddr addrVal dfAckIn
-      (dataVal,dfAckOut) <- sendData dfDatIn
-      processDataAck dataAck
+      (dataVal, dfAckOut) <- sendData dfDatIn dataAck
       P.pure ((addrAck,dataVal),dfDatOut,dfAckOut)
 
     processAddr M2S_NoReadAddress _ = P.pure (S2M_ReadAddress { _arready = False }, Nothing)
-    processAddr msg dfAckIn
-      | maybe True (/= BmFixed) (fromKeepType $ _arburst msg) = P.pure (S2M_ReadAddress{ _arready = True }, Nothing)
-      | otherwise = do
-          (burstLenLeft,_,c) <- get
-          when (burstLenLeft == 0) $ put (fromMaybe 1 (fromKeepType $ _arlen msg), _arid msg, c)
-          P.pure (S2M_ReadAddress{ _arready = burstLenLeft == 0 && dfAckIn }, Just (axi4ReadAddrMsgToReadAddrInfo msg))
+    processAddr msg dfAckIn = do
+      (burstLenLeft,_) <- get
+      when (burstLenLeft == 0) $ put (succResizing $ fromMaybe 0 (fromKeepType $ _arlen msg), _arid msg)
+      P.pure (S2M_ReadAddress{ _arready = burstLenLeft == 0 && dfAckIn }, Just (axi4ReadAddrMsgToReadAddrInfo msg))
 
-    sendData dfDatIn = do
-      (burstLenLeft,readId,currOtp) <- get
-      sentData <- case (currOtp, burstLenLeft == 0, dfDatIn) of
-        (S2M_NoReadData, False, Just (_rdata, _ruser, _rresp)) -> do
-          put (burstLenLeft-1, readId,
-            S2M_ReadData
+    succResizing :: (KnownNat n) => Index n -> Index (n+1)
+    succResizing n = (resize n) + 1
+
+    sendData dfDatIn dataAck = do
+      (burstLenLeft,readId) <- get
+      case (burstLenLeft == 0, dfDatIn) of
+        (False, Just (_rdata, _ruser, _rresp)) -> do
+          put (burstLenLeft-1, readId)
+          P.pure
+            ( S2M_ReadData
               { _rid = readId
               , _rlast = burstLenLeft == 1
-              , _rdata, _ruser, _rresp })
-          P.pure True
-        _ -> P.pure False
-      (_,_,currOtp') <- get
-      P.pure (currOtp', sentData)
-
-    processDataAck M2S_ReadData{_rready} = when _rready $ do
-      (a,b,_) <- get
-      put (a,b,S2M_NoReadData)
+              , _rdata, _ruser, _rresp }
+            , _rready dataAck)
+        _ -> P.pure (S2M_NoReadData, False)
 
 instance
   ( GoodAxi4ReadAddressConfig confAR
@@ -632,7 +635,7 @@ instance
 
 -- Fifo classes for Axi4 manager port
 
--- TODO let user choose burst size
+-- Only allows for burst length of 1
 instance
   ( GoodAxi4WriteAddressConfig confAW
   , GoodAxi4WriteDataConfig confW
@@ -681,7 +684,7 @@ instance
       (addrReceived, b) <- get
       put (_awready || addrReceived, b)
       P.pure $ if addrReceived then M2S_NoWriteAddress
-               else axi4WriteAddrMsgFromWriteAddrInfo (toKeepType 1) (toKeepType Bs1) (toKeepType BmFixed) info
+               else axi4WriteAddrMsgFromWriteAddrInfo (toKeepType 1) (toKeepType BmFixed) info
 
     sendData _ Nothing = P.pure (M2S_NoWriteData, False)
     sendData S2M_WriteData{_wready} (Just (_, dat, user)) = do
@@ -756,13 +759,17 @@ instance
       , M2S_ReadData { _rready = False }
       )
 
-    stateFn _ (addrAck, readVal) dfAckIn dfDatIn
-      = P.pure ((processAddrInfo dfDatIn, M2S_ReadData { _rready = dfAckIn }), processReadVal readVal, _arready addrAck)
+    stateFn _ (addrAck, readVal) dfAckIn dfDatIn =
+      let readAddrMsg = processAddrInfo dfDatIn
+      in  P.pure ((readAddrMsg, M2S_ReadData { _rready = dfAckIn }), processReadVal readVal, getDfAckOut addrAck readAddrMsg)
 
-    processAddrInfo = maybe M2S_NoReadAddress (axi4ReadAddrMsgFromReadAddrInfo (toKeepType 1) (toKeepType Bs1) (toKeepType BmFixed))
+    processAddrInfo = maybe M2S_NoReadAddress axi4ReadAddrMsgFromReadAddrInfo
 
     processReadVal S2M_NoReadData = Nothing
     processReadVal S2M_ReadData{..} = Just (_rdata, _ruser)
+
+    getDfAckOut _ M2S_NoReadAddress = False
+    getDfAckOut addrAck _ = _arready addrAck
 
 instance
   ( GoodAxi4ReadAddressConfig confAR
@@ -804,7 +811,7 @@ dfToDfLikeOtp
   -> Circuit (Df (Dom df) (FwdPayload df)) df
 dfToDfLikeOtp = mapCircuit (, P.pure (Ack False)) P.fst id id . toDfCircuit
 
--- TODO comment
+-- 'toDfCircuit', but the 'DfLike' is inside a 'Vec'
 vecToDfLike
   :: DfLike df
   => HiddenClockResetEnable (Dom df)
@@ -813,7 +820,7 @@ vecToDfLike
   -> Circuit (Vec n (Df (Dom df) (FwdPayload df)), Vec n (Reverse (Df (Dom df) (BwdPayload df)))) (Vec n df)
 vecToDfLike params = mapCircuit (uncurry C.zip) unzip id id $ vecCircuits $ toDfCircuit <$> params
 
--- TODO comment
+-- 'fromDfCircuit', but the 'DfLike' is inside a 'Vec'
 vecFromDfLike
   :: DfLike df
   => HiddenClockResetEnable (Dom df)
@@ -822,7 +829,7 @@ vecFromDfLike
   -> Circuit (Vec n (Reverse df)) (Vec n (Df (Dom df) (BwdPayload df)), Vec n (Reverse (Df (Dom df) (FwdPayload df))))
 vecFromDfLike params = mapCircuit id id unzip (uncurry C.zip) $ vecCircuits $ fromDfCircuit <$> params
 
--- TODO comment
+-- 'toDfCircuit', but on a pair of 'DfLike's
 tupToDfLike
   :: DfLike dfA
   => DfLike dfB
@@ -834,7 +841,7 @@ tupToDfLike
 tupToDfLike (argsA, argsB) = mapCircuit f f id id $ tupCircuits (toDfCircuit argsA) (toDfCircuit argsB) where
   f ((a,b),(c,d)) = ((a,c),(b,d))
 
--- TODO comment
+-- 'fromDfCircuit', but on a pair of 'DfLike's
 tupFromDfLike
   :: DfLike dfA
   => DfLike dfB
@@ -846,7 +853,7 @@ tupFromDfLike
 tupFromDfLike (argsA, argsB) = mapCircuit id id f f $ tupCircuits (fromDfCircuit argsA) (fromDfCircuit argsB) where
   f ((a,b),(c,d)) = ((a,c),(b,d))
 
--- TODO comment
+-- | Circuit converting a pair of items into a @Vec 2@
 tupToVec :: Circuit (a,a) (Vec 2 a)
 tupToVec = Circuit ((f *** g) . swap) where
   f :: Vec 2 p -> (p,p)
@@ -854,7 +861,7 @@ tupToVec = Circuit ((f *** g) . swap) where
   f _ = undefined -- to suppress warning
   g (x,y) = x :> y :> Nil
 
--- TODO comment
+-- | Circuit converting a @Vec 2@ into a pair of items
 vecToTup :: Circuit (Vec 2 a) (a,a)
 vecToTup = Circuit ((g *** f) . swap) where
   f :: Vec 2 p -> (p,p)
@@ -862,6 +869,21 @@ vecToTup = Circuit ((g *** f) . swap) where
   f _ = undefined -- to suppress warning
   g (x,y) = x :> y :> Nil
 
+-- | Preserves 'Df' data unmodified.
+-- Potentially useful for converting between protocols.
+convert ::
+  ( DfLike dfA
+  , DfLike dfB
+  , BwdPayload dfA ~ FwdPayload dfB
+  , FwdPayload dfA ~ BwdPayload dfB
+  , Dom dfA ~ Dom dfB
+  , HiddenClockResetEnable (Dom dfA) ) =>
+  (Proxy dfA, DfLikeParam dfA) ->
+  (Proxy dfB, DfLikeParam dfB) ->
+  Circuit (Reverse dfA) dfB
+convert dfA dfB
+  =  fromDfCircuit dfA
+  |> toDfCircuit dfB
 
 -- | Like 'P.map'
 map ::
@@ -1484,7 +1506,6 @@ registerBwd dfA dfB
   |> tupCircuits (Df.registerBwd) idC
   |> toDfCircuit dfB
 
--- TODO maybe status info??
 -- | A fifo buffer with user-provided depth.
 -- Uses blockram to store data
 fifo ::
