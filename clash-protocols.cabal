@@ -147,6 +147,8 @@ library
     Protocols.Axi4.WriteData
     Protocols.Axi4.WriteResponse
 
+    Protocols.Avalon.MemMap.AvalonMemMap
+
     Protocols.Df
     Protocols.DfLike
     Protocols.Hedgehog
@@ -174,6 +176,7 @@ test-suite unittests
   main-is: unittests.hs
   other-modules:
     Tests.Protocols
+    Tests.Protocols.AvalonMM
     Tests.Protocols.Df
     Tests.Protocols.Plugin
 
