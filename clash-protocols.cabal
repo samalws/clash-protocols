@@ -149,6 +149,8 @@ library
     Protocols.Axi4.WriteData
     Protocols.Axi4.WriteResponse
 
+    Protocols.Avalon.MemMap.AvalonMemMap
+
     Protocols.Df
     -- Protocols.DfLike
     Protocols.DfLike
