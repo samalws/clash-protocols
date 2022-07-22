@@ -9,6 +9,8 @@ Internal module to prevent hs-boot files (breaks Haddock)
 
 module Protocols.Internal where
 
+import           Control.DeepSeq (NFData)
+import           Data.Maybe (fromMaybe)
 import           Data.Proxy
 import           GHC.Base (Any)
 import           Prelude hiding (map, const)
@@ -721,11 +723,23 @@ type family KeepType (keep :: Bool) (optionalType :: Type) = t | t -> keep optio
   KeepType 'True optionalType = Identity optionalType
   KeepType 'False optionalType = Proxy optionalType
 
+-- TODO
+deriving instance (C.ShowX t) => (C.ShowX (Identity t))
+deriving instance (C.ShowX t) => (C.ShowX (Proxy t))
+deriving instance (C.NFDataX t) => (C.NFDataX (Identity t))
+deriving instance (C.NFDataX t) => (C.NFDataX (Proxy t))
+
 -- | We want to define operations on 'KeepType' that work for both possibilities
 -- (@keep = 'True@ and @keep = 'False@), but we can't pattern match directly.
 -- Instead we need to define a class and instantiate
 -- the class for both @'True@ and @'False@.
-class KeepTypeClass (keep :: Bool) where
+class
+  ( Eq (KeepType keep Bool)
+  , Show (KeepType keep Bool)
+  , C.ShowX (KeepType keep Bool)
+  , NFData (KeepType keep Bool)
+  , C.NFDataX (KeepType keep Bool)
+  ) => KeepTypeClass (keep :: Bool) where
   -- | Get the value of @keep@ at the term level.
   getKeep :: KeepType keep optionalType -> Bool
   -- | Convert an optional value to a normal value,
@@ -748,6 +762,35 @@ instance KeepTypeClass 'False where
   fromKeepType _ = Nothing
   toKeepType _ = Proxy
   mapKeepType = fmap
+
+-- TODO comment
+fromKeepTypeDef
+  :: KeepTypeClass keep
+  => optionalType
+  -> KeepType keep optionalType
+  -> optionalType
+fromKeepTypeDef deflt val = fromMaybe deflt (fromKeepType val)
+
+-- | Convert one optional field to another, keeping the value the same if possible.
+-- If not possible, a default argument is provided.
+convKeepType :: (KeepTypeClass a, KeepTypeClass b) => t -> KeepType a t -> KeepType b t
+convKeepType b = toKeepType . fromKeepTypeDef b
+
+-- | Another class that holds for all possible values.
+-- In this case, we want to grab a number value of width @n@ if @n@ is nonzero.
+-- Otherwise we provide a default value.
+class (C.KnownNat n) => MaybeZeroNat (n :: C.Nat) where
+  -- Grab a number value of width @n@ if @n@ is nonzero.
+  -- Otherwise use a default value.
+  -- The output number is size @n+1@ to simplify the definition
+  -- and allow for the @n=0@ case to provide a number.
+  fromMaybeEmptyNum :: C.Unsigned (n C.+ 1) -> C.Unsigned n -> C.Unsigned (n C.+ 1)
+
+instance MaybeZeroNat 0 where
+  fromMaybeEmptyNum n _ = n
+
+instance (1 C.<= n, C.KnownNat n) => MaybeZeroNat n where
+  fromMaybeEmptyNum _ m = C.resize m
 
 -- | Protocol to reverse a circuit.
 -- 'Fwd' becomes 'Bwd' and vice versa.
