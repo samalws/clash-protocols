@@ -6,6 +6,7 @@ Types and instance declarations for the Avalon-stream protocol.
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE MultiParamTypeClasses #-}
 {-# LANGUAGE NamedFieldPuns #-}
+{-# LANGUAGE RecordWildCards #-}
 {-# LANGUAGE UndecidableInstances #-}
 
 module Protocols.Avalon.Stream.AvalonStream where
@@ -122,6 +123,62 @@ deriving instance
   , Eq dataType
   ) => Eq (AvalonStreamM2S conf dataType)
 
+-- | TODO Data sent from master to slave.
+-- The tvalid field is left out: messages with
+-- @tvalid = False@ should be sent as a @NoAvalonStreamM2S@.
+data AvalonStreamExtraInfo (conf :: AvalonStreamConfig)
+  = AvalonStreamExtraInfo
+  { _echannel       :: Unsigned (ChannelWidth conf)
+  , _eerror         :: Unsigned (ErrorWidth conf)
+  , _estartofpacket :: KeepType (KeepStartOfPacket conf) Bool
+  , _eendofpacket   :: KeepType (KeepEndOfPacket conf) Bool
+  , _eempty         :: Unsigned (EmptyWidth conf)
+  }
+  deriving (Generic, Bundle)
+
+deriving instance
+  ( GoodAvalonStreamConfig conf
+  ) => C.NFDataX (AvalonStreamExtraInfo conf)
+
+deriving instance
+  ( GoodAvalonStreamConfig conf
+  ) => NFData (AvalonStreamExtraInfo conf)
+
+deriving instance
+  ( GoodAvalonStreamConfig conf
+  ) => C.ShowX (AvalonStreamExtraInfo conf)
+
+deriving instance
+  ( GoodAvalonStreamConfig conf
+  ) => Show (AvalonStreamExtraInfo conf)
+
+deriving instance
+  ( GoodAvalonStreamConfig conf
+  ) => Eq (AvalonStreamExtraInfo conf)
+
+avalonStreamDataToM2S :: Maybe (AvalonStreamExtraInfo conf, dataType) -> AvalonStreamM2S conf dataType
+avalonStreamDataToM2S Nothing = NoAvalonStreamM2S
+avalonStreamDataToM2S (Just (AvalonStreamExtraInfo{..}, _data))
+  = AvalonStreamM2S
+  { _data
+  , _channel       = _echannel
+  , _error         = _eerror
+  , _startofpacket = _estartofpacket
+  , _endofpacket   = _eendofpacket
+  , _empty         = _eempty
+  }
+
+avalonStreamM2SToData :: AvalonStreamM2S conf dataType -> Maybe (AvalonStreamExtraInfo conf, dataType)
+avalonStreamM2SToData NoAvalonStreamM2S = Nothing
+avalonStreamM2SToData AvalonStreamM2S{..}
+  = Just (AvalonStreamExtraInfo
+  { _echannel       = _channel
+  , _eerror         = _error
+  , _estartofpacket = _startofpacket
+  , _eendofpacket   = _endofpacket
+  , _eempty         = _empty
+  }, _data)
+
 -- | Data sent from slave to master.
 -- A simple acknowledge message.
 data AvalonStreamS2M (readyLatency :: Nat) = AvalonStreamS2M { _ready :: Bool }
@@ -142,18 +199,24 @@ instance (ReadyLatency conf ~ 0) => Backpressure (AvalonStream dom conf dataType
 instance (ReadyLatency conf ~ 0, GoodAvalonStreamConfig conf, NFDataX dataType) =>
   DfLike.DfLike   (Reverse (AvalonStream dom conf dataType)) where
   type Dom        (Reverse (AvalonStream dom conf dataType)) = dom
-  type BwdPayload (Reverse (AvalonStream dom conf dataType)) = dataType
+  type BwdPayload (Reverse (AvalonStream dom conf dataType)) = (AvalonStreamExtraInfo conf, dataType)
 
   toDfCircuit _ = DfLike.toDfCircuitHelper s0 blankOtp stateFn where
     s0 = ()
     blankOtp = AvalonStreamS2M { _ready = False }
-    stateFn (AvalonStreamM2S { _data }) ack _ = pure (AvalonStreamS2M { _ready = ack }, Just _data, False)
-    stateFn _ _ _ = pure (AvalonStreamS2M { _ready = False }, Nothing, False)
+    stateFn m2s ack _ = pure (AvalonStreamS2M { _ready = ack }, avalonStreamM2SToData m2s, False)
+
+instance (ReadyLatency conf ~ 0, GoodAvalonStreamConfig conf, NFDataX dataType) =>
+  DfLike.ImplicitInfoClass    (Reverse (AvalonStream dom conf dataType)) where
+  type ImplicitInfoBwdPayload (Reverse (AvalonStream dom conf dataType)) = dataType
+
+  mapFwd _ () = ()
+  mapBwd _ (_, dat) = dat
 
 instance (GoodAvalonStreamConfig conf, NFDataX dataType) =>
   DfLike.DfLike    (AvalonStream dom conf dataType) where
   type Dom         (AvalonStream dom conf dataType) = dom
-  type FwdPayload  (AvalonStream dom conf dataType) = dataType
+  type FwdPayload  (AvalonStream dom conf dataType) = (AvalonStreamExtraInfo conf, dataType)
   type DfLikeParam (AvalonStream dom conf dataType) = Unsigned (ChannelWidth conf)
 
   toDfCircuit (proxy, param) = DfLike.toDfCircuitHelper s0 blankOtp (stateFn param) where
@@ -168,11 +231,18 @@ instance (GoodAvalonStreamConfig conf, NFDataX dataType) =>
       sending <- gets snd
       put (ackQueue', sending)
       popped <- case (sending, otpItem) of
-        (NoAvalonStreamM2S, Just oi) -> put (ackQueue', AvalonStreamM2S { _data = oi, _channel, _error = 0, _startofpacket = toKeepType True, _endofpacket = toKeepType True, _empty
-= 0 }) >> pure True
+        (NoAvalonStreamM2S, Just oi) -> put (ackQueue', avalonStreamDataToM2S (Just oi)) >> pure True
         _ -> pure False
       toSend <- gets snd
       case toSend of -- ack might be undefined, so we shouldn't look at it unless we have to
         AvalonStreamM2S{} -> when ack $ put (ackQueue', NoAvalonStreamM2S)
         _ -> pure ()
       pure (toSend, Nothing, popped)
+
+instance (GoodAvalonStreamConfig conf, NFDataX dataType) =>
+  DfLike.ImplicitInfoClass    (AvalonStream dom conf dataType) where
+  type ImplicitInfoFwdPayload (AvalonStream dom conf dataType) = dataType
+  type ImplicitInfoFwdParam   (AvalonStream dom conf dataType) = AvalonStreamExtraInfo conf
+
+  mapFwd (_, a) b = (a, b)
+  mapBwd _ () = ()
