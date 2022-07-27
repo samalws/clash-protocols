@@ -11,6 +11,7 @@ but rather gets send "outwards" to whoever is controlling the reset signal of th
 {-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE MultiParamTypeClasses #-}
 {-# LANGUAGE NamedFieldPuns #-}
+{-# LANGUAGE RecordWildCards #-}
 {-# LANGUAGE TypeFamilyDependencies #-}
 {-# LANGUAGE UndecidableInstances #-}
 
@@ -21,8 +22,7 @@ module Protocols.Avalon.MemMap.AvalonMemMap where
 import qualified Prelude as P
 
 import           Control.Arrow ((***))
-import           Control.Monad (when)
-import           Control.Monad.State (get, put, gets)
+import           Control.Monad.State (put, gets)
 import           Control.DeepSeq (NFData)
 import qualified Data.Maybe as Maybe
 import           Data.Proxy
@@ -34,7 +34,7 @@ import qualified Clash.Prelude as C
 
 -- me
 import           Protocols.Internal
-import qualified Protocols.DfLike as DfLike
+import qualified Protocols.DfConv as DfConv
 import qualified Protocols.Df as Df
 import           Protocols.Hedgehog.Internal
 
@@ -294,6 +294,81 @@ deriving instance (GoodMMManagerConfig config,
                    => Eq (AvalonManagerIn config readDataType)
 
 
+-- TODO
+data AvalonManagerWriteImpt config writeDataType
+  =  AvalonManagerWriteImpt
+  { mwi_addr        :: Unsigned (AddrWidth       (MShared config))
+  , mwi_byteEnable  :: Unsigned (ByteEnableWidth (MShared config))
+  , mwi_burstCount  :: Unsigned (BurstCountWidth (MShared config))
+  , mwi_flush       :: KeepType (KeepFlush                config) Bool
+  , mwi_writeData   :: writeDataType
+  }
+  deriving (Generic, Bundle)
+
+deriving instance (GoodMMManagerConfig config,
+                   NFDataX writeDataType)
+                   => NFDataX (AvalonManagerWriteImpt config writeDataType)
+deriving instance (GoodMMManagerConfig config,
+                   NFData writeDataType)
+                   => NFData (AvalonManagerWriteImpt config writeDataType)
+deriving instance (GoodMMManagerConfig config,
+                   ShowX writeDataType)
+                   => ShowX (AvalonManagerWriteImpt config writeDataType)
+deriving instance (GoodMMManagerConfig config,
+                   Show writeDataType)
+                   => Show (AvalonManagerWriteImpt config writeDataType)
+deriving instance (GoodMMManagerConfig config,
+                   Eq writeDataType)
+                   => Eq (AvalonManagerWriteImpt config writeDataType)
+
+
+-- TODO
+data AvalonManagerReadReqImpt config
+  =  AvalonManagerReadReqImpt
+  { mrri_addr        :: Unsigned (AddrWidth       (MShared config))
+  , mrri_byteEnable  :: Unsigned (ByteEnableWidth (MShared config))
+  , mrri_burstCount  :: Unsigned (BurstCountWidth (MShared config))
+  , mrri_flush       :: KeepType (KeepFlush                config) Bool
+  }
+  deriving (Generic, Bundle)
+
+deriving instance (GoodMMManagerConfig config)
+                   => NFDataX (AvalonManagerReadReqImpt config)
+deriving instance (GoodMMManagerConfig config)
+                   => NFData (AvalonManagerReadReqImpt config)
+deriving instance (GoodMMManagerConfig config)
+                   => ShowX (AvalonManagerReadReqImpt config)
+deriving instance (GoodMMManagerConfig config)
+                   => Show (AvalonManagerReadReqImpt config)
+deriving instance (GoodMMManagerConfig config)
+                   => Eq (AvalonManagerReadReqImpt config)
+
+
+-- TODO
+data AvalonManagerReadImpt config readDataType
+  =  AvalonManagerReadImpt
+  { mri_endOfPacket   :: KeepType (KeepEndOfPacket   (MShared config)) Bool
+  , mri_readData      :: readDataType
+  }
+  deriving (Generic, Bundle)
+
+deriving instance (GoodMMManagerConfig config,
+                   NFDataX readDataType)
+                   => NFDataX (AvalonManagerReadImpt config readDataType)
+deriving instance (GoodMMManagerConfig config,
+                   NFData readDataType)
+                   => NFData (AvalonManagerReadImpt config readDataType)
+deriving instance (GoodMMManagerConfig config,
+                   ShowX readDataType)
+                   => ShowX (AvalonManagerReadImpt config readDataType)
+deriving instance (GoodMMManagerConfig config,
+                   Show readDataType)
+                   => Show (AvalonManagerReadImpt config readDataType)
+deriving instance (GoodMMManagerConfig config,
+                   Eq readDataType)
+                   => Eq (AvalonManagerReadImpt config readDataType)
+
+
 -- Data coming out of an Avalon MM subordinate port.
 -- All fields are optional and can be toggled using the config.
 data AvalonSubordinateOut config readDataType
@@ -328,7 +403,7 @@ deriving instance (GoodMMSubordinateConfig config,
 -- Data coming into an Avalon MM subordinate port.
 -- All fields are optional and can be toggled using the config.
 data AvalonSubordinateIn config writeDataType
-  =  AvalonSubordinateIn
+  = AvalonSubordinateIn
   { si_addr               :: Unsigned (AddrWidth              (SShared config))
   , si_read               :: KeepType (KeepRead               (SShared config)) Bool
   , si_write              :: KeepType (KeepWrite              (SShared config)) Bool
@@ -357,6 +432,83 @@ deriving instance (GoodMMSubordinateConfig config,
 deriving instance (GoodMMSubordinateConfig config,
                    Eq writeDataType)
                    => Eq (AvalonSubordinateIn config writeDataType)
+
+
+-- TODO
+data AvalonSubordinateWriteImpt config writeDataType
+  = AvalonSubordinateWriteImpt
+  { swi_addr               :: Unsigned (AddrWidth              (SShared config))
+  , swi_byteEnable         :: Unsigned (ByteEnableWidth        (SShared config))
+  , swi_burstCount         :: Unsigned (BurstCountWidth        (SShared config))
+  , swi_beginTransfer      :: KeepType (KeepBeginTransfer               config) Bool
+  , swi_beginBurstTransfer :: KeepType (KeepBeginBurstTransfer          config) Bool
+  , swi_writeData          :: writeDataType
+  }
+  deriving (Generic, Bundle)
+
+deriving instance (GoodMMSubordinateConfig config,
+                   NFDataX writeDataType)
+                   => NFDataX (AvalonSubordinateWriteImpt config writeDataType)
+deriving instance (GoodMMSubordinateConfig config,
+                   NFData writeDataType)
+                   => NFData (AvalonSubordinateWriteImpt config writeDataType)
+deriving instance (GoodMMSubordinateConfig config,
+                   ShowX writeDataType)
+                   => ShowX (AvalonSubordinateWriteImpt config writeDataType)
+deriving instance (GoodMMSubordinateConfig config,
+                   Show writeDataType)
+                   => Show (AvalonSubordinateWriteImpt config writeDataType)
+deriving instance (GoodMMSubordinateConfig config,
+                   Eq writeDataType)
+                   => Eq (AvalonSubordinateWriteImpt config writeDataType)
+
+
+-- TODO
+data AvalonSubordinateReadReqImpt config
+  = AvalonSubordinateReadReqImpt
+  { srri_addr               :: Unsigned (AddrWidth              (SShared config))
+  , srri_byteEnable         :: Unsigned (ByteEnableWidth        (SShared config))
+  , srri_burstCount         :: Unsigned (BurstCountWidth        (SShared config))
+  , srri_beginTransfer      :: KeepType (KeepBeginTransfer               config) Bool
+  , srri_beginBurstTransfer :: KeepType (KeepBeginBurstTransfer          config) Bool
+  }
+  deriving (Generic, Bundle)
+
+deriving instance (GoodMMSubordinateConfig config)
+                   => NFDataX (AvalonSubordinateReadReqImpt config)
+deriving instance (GoodMMSubordinateConfig config)
+                   => NFData (AvalonSubordinateReadReqImpt config)
+deriving instance (GoodMMSubordinateConfig config)
+                   => ShowX (AvalonSubordinateReadReqImpt config)
+deriving instance (GoodMMSubordinateConfig config)
+                   => Show (AvalonSubordinateReadReqImpt config)
+deriving instance (GoodMMSubordinateConfig config)
+                   => Eq (AvalonSubordinateReadReqImpt config)
+
+
+-- TODO irq? readyForData? dataAvailable?
+data AvalonSubordinateReadImpt config readDataType
+  = AvalonSubordinateReadImpt
+  { sri_endOfPacket   :: KeepType (KeepEndOfPacket   (SShared config)) Bool
+  , sri_readData      :: readDataType
+  }
+  deriving (Generic, Bundle)
+
+deriving instance (GoodMMSubordinateConfig config,
+                   NFDataX readDataType)
+                   => NFDataX (AvalonSubordinateReadImpt config readDataType)
+deriving instance (GoodMMSubordinateConfig config,
+                   NFData readDataType)
+                   => NFData (AvalonSubordinateReadImpt config readDataType)
+deriving instance (GoodMMSubordinateConfig config,
+                   ShowX readDataType)
+                   => ShowX (AvalonSubordinateReadImpt config readDataType)
+deriving instance (GoodMMSubordinateConfig config,
+                   Show readDataType)
+                   => Show (AvalonSubordinateReadImpt config readDataType)
+deriving instance (GoodMMSubordinateConfig config,
+                   Eq readDataType)
+                   => Eq (AvalonSubordinateReadImpt config readDataType)
 
 -- Interconnect fabric, which can be used to tie together multiple managers and subordinates.
 -- managers and subordinates cannot contact each other directly; this fabric is needed in order to mediate,
@@ -543,22 +695,156 @@ boolToMMSubordinateAck ack
     }
 
 -- TODO
-mmSubordinateReadDat :: (GoodMMSubordinateConfig config) => readDataType -> AvalonSubordinateOut config readDataType
+mmSubordinateReadDat :: (GoodMMSubordinateConfig config) => AvalonSubordinateReadImpt config readDataType -> AvalonSubordinateOut config readDataType
 mmSubordinateReadDat dat
   = AvalonSubordinateOut
     { so_waitRequest   = toKeepType False
     , so_readDataValid = toKeepType True
     , so_readyForData  = toKeepType False
     , so_dataAvailable = toKeepType False
-    , so_endOfPacket   = toKeepType False
+    , so_endOfPacket   = sri_endOfPacket dat
     , so_irq           = toKeepType False
-    , so_readData      = dat
+    , so_readData      = sri_readData dat
     }
 
 -- TODO
 mmSubordinateOutToReadData :: (GoodMMSubordinateConfig config) => AvalonSubordinateOut config readDataType -> Maybe readDataType
 mmSubordinateOutToReadData so
   = if (fromKeepTypeDef True (so_readDataValid so) && not (fromKeepTypeDef False (so_waitRequest so))) then Just (so_readData so) else Nothing
+
+mmSubordinateOutToReadImpt :: (GoodMMSubordinateConfig config) => AvalonSubordinateOut config readDataType -> Maybe (AvalonSubordinateReadImpt config readDataType)
+mmSubordinateOutToReadImpt (AvalonSubordinateOut{..})
+  = if cond then Just AvalonSubordinateReadImpt
+  { sri_endOfPacket = so_endOfPacket
+  , sri_readData    = so_readData
+  } else Nothing
+  where
+  cond = fromKeepTypeDef True so_readDataValid && not (fromKeepTypeDef False so_waitRequest)
+
+mmManagerInToReadImpt :: (GoodMMManagerConfig config) => AvalonManagerIn config readDataType -> Maybe (AvalonManagerReadImpt config readDataType)
+mmManagerInToReadImpt (AvalonManagerIn{..})
+  = if cond then Just AvalonManagerReadImpt
+  { mri_endOfPacket = mi_endOfPacket
+  , mri_readData    = mi_readData
+  } else Nothing
+  where
+  cond = not mi_waitRequest -- TODO anything else?
+
+mmSubordinateInToWriteImpt :: (GoodMMSubordinateConfig config) => AvalonSubordinateIn config writeDataType -> Maybe (AvalonSubordinateWriteImpt config writeDataType)
+mmSubordinateInToWriteImpt (AvalonSubordinateIn{..})
+  = if cond then Just AvalonSubordinateWriteImpt
+  { swi_addr               = si_addr
+  , swi_byteEnable         = si_byteEnable
+  , swi_beginTransfer      = si_beginTransfer
+  , swi_burstCount         = si_burstCount
+  , swi_beginBurstTransfer = si_beginBurstTransfer
+  , swi_writeData          = si_writeData
+  } else Nothing
+  where
+  cond =  fromKeepTypeDef True si_chipSelect
+       && fromKeepTypeDef True si_write
+       && not (fromKeepTypeDef False si_read)
+       && 0 /= fromMaybeEmptyNum 1 si_byteEnable
+       && 0 /= fromMaybeEmptyNum 1 si_writeByteEnable
+
+mmSubordinateInToReadReqImpt :: (GoodMMSubordinateConfig config) => AvalonSubordinateIn config writeDataType -> Maybe (AvalonSubordinateReadReqImpt config)
+mmSubordinateInToReadReqImpt (AvalonSubordinateIn{..})
+  = if cond then Just AvalonSubordinateReadReqImpt
+  { srri_addr               = si_addr
+  , srri_byteEnable         = si_byteEnable
+  , srri_beginTransfer      = si_beginTransfer
+  , srri_burstCount         = si_burstCount
+  , srri_beginBurstTransfer = si_beginBurstTransfer
+  } else Nothing
+  where
+  cond =  fromKeepTypeDef True si_chipSelect
+       && fromKeepTypeDef True si_read
+       && not (fromKeepTypeDef False si_write)
+
+mmManagerOutToWriteImpt :: (GoodMMManagerConfig config) => AvalonManagerOut config writeDataType -> Maybe (AvalonManagerWriteImpt config writeDataType)
+mmManagerOutToWriteImpt (AvalonManagerOut{..})
+  = if cond then Just AvalonManagerWriteImpt
+  { mwi_addr       = mo_addr
+  , mwi_byteEnable = mo_byteEnable
+  , mwi_burstCount = mo_burstCount
+  , mwi_flush      = mo_flush
+  , mwi_writeData  = mo_writeData
+  } else Nothing
+  where
+  cond =  fromKeepTypeDef True mo_write
+       && not (fromKeepTypeDef False mo_read)
+       && 0 /= fromMaybeEmptyNum 1 mo_byteEnable
+
+mmManagerOutToReadReqImpt :: (GoodMMManagerConfig config) => AvalonManagerOut config writeDataType -> Maybe (AvalonManagerReadReqImpt config)
+mmManagerOutToReadReqImpt (AvalonManagerOut{..})
+  = if cond then Just AvalonManagerReadReqImpt
+  { mrri_addr       = mo_addr
+  , mrri_byteEnable = mo_byteEnable
+  , mrri_burstCount = mo_burstCount
+  , mrri_flush      = mo_flush
+  } else Nothing
+  where
+  cond =  fromKeepTypeDef True mo_read
+       && not (fromKeepTypeDef False mo_write)
+       && 0 /= fromMaybeEmptyNum 1 mo_byteEnable
+
+-- TODO comment
+mmWriteImptToSubordinateIn :: (GoodMMSubordinateConfig config) => AvalonSubordinateWriteImpt config writeDataType -> AvalonSubordinateIn config writeDataType
+mmWriteImptToSubordinateIn (AvalonSubordinateWriteImpt{..})
+  = AvalonSubordinateIn
+  { si_chipSelect         = toKeepType True
+  , si_addr               = swi_addr
+  , si_read               = toKeepType False
+  , si_write              = toKeepType True
+  , si_byteEnable         = swi_byteEnable
+  , si_writeByteEnable    = bitCoerce $ repeat True
+  , si_beginTransfer      = swi_beginTransfer
+  , si_burstCount         = swi_burstCount
+  , si_beginBurstTransfer = swi_beginBurstTransfer
+  , si_writeData          = swi_writeData
+  }
+
+-- TODO comment
+mmReadReqImptToSubordinateIn :: (GoodMMSubordinateConfig config) => AvalonSubordinateReadReqImpt config -> AvalonSubordinateIn config writeDataType
+mmReadReqImptToSubordinateIn (AvalonSubordinateReadReqImpt{..})
+  = AvalonSubordinateIn
+  { si_chipSelect         = toKeepType False
+  , si_addr               = srri_addr
+  , si_read               = toKeepType True
+  , si_write              = toKeepType False
+  , si_byteEnable         = srri_byteEnable
+  , si_writeByteEnable    = 0
+  , si_beginTransfer      = srri_beginTransfer
+  , si_burstCount         = srri_burstCount
+  , si_beginBurstTransfer = srri_beginBurstTransfer
+  , si_writeData          = errorX "No writeData for read req"
+  }
+
+-- TODO comment
+mmWriteImptToManagerOut :: (GoodMMManagerConfig config) => AvalonManagerWriteImpt config writeDataType -> AvalonManagerOut config writeDataType
+mmWriteImptToManagerOut (AvalonManagerWriteImpt{..})
+  = AvalonManagerOut
+  { mo_addr        = mwi_addr
+  , mo_read        = toKeepType False
+  , mo_write       = toKeepType True
+  , mo_byteEnable  = mwi_byteEnable
+  , mo_burstCount  = mwi_burstCount
+  , mo_flush       = mwi_flush
+  , mo_writeData   = mwi_writeData
+  }
+
+-- TODO comment
+mmReadReqImptToManagerOut :: (GoodMMManagerConfig config) => AvalonManagerReadReqImpt config -> AvalonManagerOut config writeDataType
+mmReadReqImptToManagerOut (AvalonManagerReadReqImpt{..})
+  = AvalonManagerOut
+  { mo_addr        = mrri_addr
+  , mo_read        = toKeepType True
+  , mo_write       = toKeepType False
+  , mo_byteEnable  = mrri_byteEnable
+  , mo_burstCount  = mrri_burstCount
+  , mo_flush       = mrri_flush
+  , mo_writeData   = errorX "No writeData for read req"
+  }
 
 -- Convert a boolean value to an @AvalonManagerIn@ structure.
 -- The structure gives no read data, no IRQ, etc.
@@ -589,16 +875,16 @@ mmManagerInNoData
   }
 
 -- An @AvalonManagerIn@ TODO
-mmManagerReadDat :: (GoodMMManagerConfig config) => readDataType -> AvalonManagerIn config readDataType
+mmManagerReadDat :: (GoodMMManagerConfig config) => AvalonManagerReadImpt config readDataType -> AvalonManagerIn config readDataType
 mmManagerReadDat dat
   = AvalonManagerIn
   { mi_waitRequest   = False
   , mi_readDataValid = toKeepType True
-  , mi_endOfPacket   = toKeepType False
+  , mi_endOfPacket   = mri_endOfPacket dat
   , mi_irq           = toKeepType False
   , mi_irqList       = 0
   , mi_irqNumber     = 0
-  , mi_readData      = dat
+  , mi_readData      = mri_readData dat
   }
 
 -- TODO
@@ -747,40 +1033,40 @@ instance (GoodMMManagerConfig config) => Backpressure (AvalonMMManager dom confi
 -- TODO keep waitrequest on when not receiving data?
 
 instance (GoodMMSubordinateConfig config, NFDataX readDataType, NFDataX writeDataType) =>
-  DfLike.DfLike   (Reverse (AvalonMMSubordinate dom 0 config readDataType writeDataType)) where
+  DfConv.DfConv   (Reverse (AvalonMMSubordinate dom 0 config readDataType writeDataType)) where
   type Dom        (Reverse (AvalonMMSubordinate dom 0 config readDataType writeDataType)) = dom
-  type BwdPayload (Reverse (AvalonMMSubordinate dom 0 config readDataType writeDataType)) = Either () writeDataType
-  type FwdPayload (Reverse (AvalonMMSubordinate dom 0 config readDataType writeDataType)) = readDataType
+  type BwdPayload (Reverse (AvalonMMSubordinate dom 0 config readDataType writeDataType)) = Either (AvalonSubordinateReadReqImpt config) (AvalonSubordinateWriteImpt config writeDataType)
+  type FwdPayload (Reverse (AvalonMMSubordinate dom 0 config readDataType writeDataType)) = AvalonSubordinateReadImpt config readDataType
 
-  toDfCircuit _ = DfLike.toDfCircuitHelper s0 blankOtp stateFn where
+  toDfCircuit _ = DfConv.toDfCircuitHelper s0 blankOtp stateFn where
     s0 = False
     blankOtp = boolToMMSubordinateAck False
     stateFn si dfAck dfDat = do
       dfAckSt <- gets (|| dfAck)
       let (toPut, toRet)
-            = case ( mmSubordinateInToMaybe si {- write data -}
-                   , fromKeepTypeDef True (si_read si) {- read request coming in -}
+            = case ( mmSubordinateInToWriteImpt si {- write data -}
+                   , mmSubordinateInToReadReqImpt si {- read request coming in -}
                    , dfAckSt || dfAck {- df acknowledged read request -}
                    , dfDat {- df sending read data -}
                    ) of
-                (Just wdat, _, _, _) -> (False, (boolToMMSubordinateAck dfAck, Just (Right wdat), False))
-                (Nothing, True, True, Just rdat) -> (False, (mmSubordinateReadDat rdat, if dfAckSt then Nothing else Just (Left ()), True))
-                (Nothing, True, _, _) -> ((dfAckSt || dfAck), (boolToMMSubordinateAck False, if dfAckSt then Nothing else Just (Left ()), False))
-                (Nothing, False, _, _) -> (False, (boolToMMSubordinateAck False, Nothing, False))
+                (Just wi, _, _, _) -> (False, (boolToMMSubordinateAck dfAck, Just (Right wi), False))
+                (Nothing, Just rri, True, Just rdat) -> (False, (mmSubordinateReadDat rdat, if dfAckSt then Nothing else Just (Left rri), True))
+                (Nothing, Just rri, _, _) -> ((dfAckSt || dfAck), (boolToMMSubordinateAck False, if dfAckSt then Nothing else Just (Left rri), False))
+                (Nothing, Nothing, _, _) -> (False, (boolToMMSubordinateAck False, Nothing, False))
       put toPut
       pure toRet
 
 instance (GoodMMSubordinateConfig config, NFDataX readDataType, NFDataX writeDataType) =>
-  DfLike.DfLike   (AvalonMMSubordinate dom 0 config readDataType writeDataType) where
+  DfConv.DfConv   (AvalonMMSubordinate dom 0 config readDataType writeDataType) where
   type Dom        (AvalonMMSubordinate dom 0 config readDataType writeDataType) = dom
-  type BwdPayload (AvalonMMSubordinate dom 0 config readDataType writeDataType) = readDataType
-  type FwdPayload (AvalonMMSubordinate dom 0 config readDataType writeDataType) = Either () writeDataType
+  type BwdPayload (AvalonMMSubordinate dom 0 config readDataType writeDataType) = AvalonSubordinateReadImpt config readDataType
+  type FwdPayload (AvalonMMSubordinate dom 0 config readDataType writeDataType) = Either (AvalonSubordinateReadReqImpt config) (AvalonSubordinateWriteImpt config writeDataType)
 
-  toDfCircuit _ = DfLike.toDfCircuitHelper s0 blankOtp stateFn where
+  toDfCircuit _ = DfConv.toDfCircuitHelper s0 blankOtp stateFn where
     s0 = Nothing
     blankOtp = mmSubordinateInNoData
     stateFn so dfAck dfDat = do
-      readDatStored <- gets (<|> mmSubordinateOutToReadData so)
+      readDatStored <- gets (<|> mmSubordinateOutToReadImpt so)
       let (toPut, toRetSi, toRetAck)
             = case ( readDatStored
                    , dfAck
@@ -788,23 +1074,23 @@ instance (GoodMMSubordinateConfig config, NFDataX readDataType, NFDataX writeDat
                    ) of
             (Just _, True, _) -> (Nothing, mmSubordinateInNoData, False)
             (Just dat, False, _) -> (Just dat, mmSubordinateInNoData, False)
-            (Nothing, _, Just (Right otpItem)) -> (Nothing, mmSubordinateInSendingData { si_writeData = otpItem }, mmSubordinateOutToBool so)
-            (Nothing, _, Just (Left ())) -> (Nothing, mmSubordinateInReadingData, mmSubordinateOutToBool so)
+            (Nothing, _, Just (Right wi)) -> (Nothing, mmWriteImptToSubordinateIn wi, mmSubordinateOutToBool so)
+            (Nothing, _, Just (Left ri)) -> (Nothing, mmReadReqImptToSubordinateIn ri, mmSubordinateOutToBool so)
             (Nothing, _, Nothing) -> (Nothing, mmSubordinateInNoData, False)
       put toPut
       pure (toRetSi, readDatStored, toRetAck)
 
 instance (GoodMMManagerConfig config, NFDataX readDataType, NFDataX writeDataType) =>
-  DfLike.DfLike   (AvalonMMManager dom config readDataType writeDataType) where
+  DfConv.DfConv   (AvalonMMManager dom config readDataType writeDataType) where
   type Dom        (AvalonMMManager dom config readDataType writeDataType) = dom
-  type BwdPayload (AvalonMMManager dom config readDataType writeDataType) = readDataType
-  type FwdPayload (AvalonMMManager dom config readDataType writeDataType) = Either () writeDataType
+  type BwdPayload (AvalonMMManager dom config readDataType writeDataType) = AvalonManagerReadImpt config readDataType
+  type FwdPayload (AvalonMMManager dom config readDataType writeDataType) = Either (AvalonManagerReadReqImpt config) (AvalonManagerWriteImpt config writeDataType)
 
-  toDfCircuit _ = DfLike.toDfCircuitHelper s0 blankOtp stateFn where
+  toDfCircuit _ = DfConv.toDfCircuitHelper s0 blankOtp stateFn where
     s0 = Nothing
     blankOtp = mmManagerOutNoData
     stateFn mi dfAck dfDat = do
-      readDatStored <- gets (<|> mmManagerInToReadData mi)
+      readDatStored <- gets (<|> mmManagerInToReadImpt mi)
       let (toPut, toRetMo, toRetAck)
             = case ( readDatStored
                    , dfAck
@@ -812,33 +1098,33 @@ instance (GoodMMManagerConfig config, NFDataX readDataType, NFDataX writeDataTyp
                    ) of
             (Just _, True, _) -> (Nothing, mmManagerOutNoData, False)
             (Just dat, False, _) -> (Just dat, mmManagerOutNoData, False)
-            (Nothing, _, Just (Right otpItem)) -> (Nothing, mmManagerOutSendingData { mo_writeData = otpItem }, mmManagerInToBool mi)
-            (Nothing, _, Just (Left ())) -> (Nothing, mmManagerOutReadingData, mmManagerInToBool mi)
+            (Nothing, _, Just (Right wi)) -> (Nothing, mmWriteImptToManagerOut wi, mmManagerInToBool mi)
+            (Nothing, _, Just (Left ri)) -> (Nothing, mmReadReqImptToManagerOut ri, mmManagerInToBool mi)
             (Nothing, _, Nothing) -> (Nothing, mmManagerOutNoData, False)
       put toPut
       pure (toRetMo, readDatStored, toRetAck)
 
 instance (GoodMMManagerConfig config, NFDataX readDataType, NFDataX writeDataType) =>
-  DfLike.DfLike   (Reverse (AvalonMMManager dom config readDataType writeDataType)) where
+  DfConv.DfConv   (Reverse (AvalonMMManager dom config readDataType writeDataType)) where
   type Dom        (Reverse (AvalonMMManager dom config readDataType writeDataType)) = dom
-  type BwdPayload (Reverse (AvalonMMManager dom config readDataType writeDataType)) = Either () writeDataType
-  type FwdPayload (Reverse (AvalonMMManager dom config readDataType writeDataType)) = readDataType
+  type BwdPayload (Reverse (AvalonMMManager dom config readDataType writeDataType)) = Either (AvalonManagerReadReqImpt config) (AvalonManagerWriteImpt config writeDataType)
+  type FwdPayload (Reverse (AvalonMMManager dom config readDataType writeDataType)) = AvalonManagerReadImpt config readDataType
 
-  toDfCircuit _ = DfLike.toDfCircuitHelper s0 blankOtp stateFn where
+  toDfCircuit _ = DfConv.toDfCircuitHelper s0 blankOtp stateFn where
     s0 = False
     blankOtp = boolToMMManagerAck False
     stateFn mo dfAck dfDat = do
       dfAckSt <- gets (|| dfAck)
       let (toPut, toRet)
-            = case ( mmManagerOutToMaybe mo {- write data -}
-                   , fromKeepTypeDef True (mo_read mo) {- read request coming in -}
+            = case ( mmManagerOutToWriteImpt mo {- write data -}
+                   , mmManagerOutToReadReqImpt mo {- read request coming in -}
                    , dfAckSt || dfAck {- df acknowledged read request -}
                    , dfDat {- df sending read data -}
                    ) of
-            (Just wdat, _, _, _) -> (False, (boolToMMManagerAck dfAck, Just (Right wdat), False))
-            (Nothing, True, True, Just rdat) -> (False, (mmManagerReadDat rdat, if dfAckSt then Nothing else Just (Left ()), True))
-            (Nothing, True, _, _) -> ((dfAckSt || dfAck), (boolToMMManagerAck False, if dfAckSt then Nothing else Just (Left ()), False))
-            (Nothing, False, _, _) -> (False, (boolToMMManagerAck False, Nothing, False))
+            (Just wi, _, _, _) -> (False, (boolToMMManagerAck dfAck, Just (Right wi), False))
+            (Nothing, Just ri, True, Just rdat) -> (False, (mmManagerReadDat rdat, if dfAckSt then Nothing else Just (Left ri), True))
+            (Nothing, Just ri, _, _) -> ((dfAckSt || dfAck), (boolToMMManagerAck False, if dfAckSt then Nothing else Just (Left ri), False))
+            (Nothing, Nothing, _, _) -> (False, (boolToMMManagerAck False, Nothing, False))
       put toPut
       pure toRet
 
@@ -856,28 +1142,29 @@ instance (GoodMMManagerConfig config, NFDataX writeDataType, NFDataX readDataTyp
   stallC conf (head -> (stallAck, stalls))
     = withClockResetEnable clockGen resetGen enableGen
     $ (coerceCircuit :: Circuit (Reverse (Reverse a)) b -> Circuit a b)
-    $ DfLike.stall (Proxy, ()) (Proxy, ()) conf stallAck stalls
+    $ DfConv.stall Proxy Proxy conf stallAck stalls
 
 instance (GoodMMManagerConfig config, NFDataX writeDataType, NFDataX readDataType, KnownDomain dom) =>
   Drivable (AvalonMMManager dom config readDataType writeDataType) where
   type ExpectType (AvalonMMManager dom config readDataType writeDataType)
-    = [writeDataType]
+    = [Either (AvalonManagerReadReqImpt config) (AvalonManagerWriteImpt config writeDataType)]
 
-  -- toSimulateType Proxy = P.map (avalonStreamDataToM2S . Just)
-  fromSimulateType Proxy = Maybe.mapMaybe mmManagerOutToMaybe
+  toSimulateType Proxy = _ -- P.map (avalonStreamDataToM2S . Just)
+  fromSimulateType Proxy = _ -- Maybe.mapMaybe mmManagerOutToMaybe
 
 {-
   driveC conf vals
     = withClockResetEnable clockGen resetGen enableGen
-    $ DfLike.drive (Proxy, ()) conf (avalonStreamM2SToData <$> vals)
+    $ DfConv.drive Proxy conf (avalonStreamM2SToData <$> vals)
   sampleC conf ckt
     = withClockResetEnable clockGen resetGen enableGen
     $ fmap mmManagerOutToMaybe
-    $ DfLike.sample (Proxy, ()) conf
+    $ DfConv.sample Proxy conf
     $ (coerceCircuit :: Circuit a b -> Circuit a (Reverse (Reverse b)))
     $ ckt
 -}
 
+{-
 instance
   ( GoodMMManagerConfig config
   , NFDataX writeDataType
@@ -912,7 +1199,7 @@ instance (GoodMMSubordinateConfig config, NFDataX writeDataType, NFDataX readDat
   stallC conf (head -> (stallAck, stalls))
     = withClockResetEnable clockGen resetGen enableGen
     $ (coerceCircuit :: Circuit (Reverse (Reverse a)) b -> Circuit a b)
-    $ DfLike.stall (Proxy, ()) (Proxy, ()) conf stallAck stalls
+    $ DfConv.stall Proxy Proxy conf stallAck stalls
 
 instance (KeepWaitRequest config ~ 'True, GoodMMSubordinateConfig config, NFDataX writeDataType, NFDataX readDataType, KnownDomain dom) =>
   Drivable (AvalonMMSubordinate dom 0 config readDataType writeDataType) where
@@ -925,11 +1212,11 @@ instance (KeepWaitRequest config ~ 'True, GoodMMSubordinateConfig config, NFData
 {-
   driveC conf vals
     = withClockResetEnable clockGen resetGen enableGen
-    $ DfLike.drive (Proxy, ()) conf (avalonStreamM2SToData <$> vals)
+    $ DfConv.drive Proxy conf (avalonStreamM2SToData <$> vals)
   sampleC conf ckt
     = withClockResetEnable clockGen resetGen enableGen
     $ fmap mmSubordinateInToMaybe
-    $ DfLike.sample () conf
+    $ DfConv.sample () conf
     $ (coerceCircuit :: Circuit a b -> Circuit a (Reverse (Reverse b)))
     $ ckt
 -}
@@ -954,3 +1241,4 @@ instance
   expectN Proxy options nExpected sampled
     = expectN (Proxy @(Df.Df dom _)) options nExpected
     $ Df.maybeToData . mmSubordinateInToMaybe <$> sampled
+-}
