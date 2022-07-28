@@ -61,6 +61,7 @@ module Protocols.DfConv
   , registerFwd
   , registerBwd
   , fifo
+  , interconnect
 
     -- * Simulation functions
   , drive
@@ -1215,6 +1216,32 @@ fifo dfA dfB fifoDepth
   =  fromDfCircuit dfA
   |> tupCircuits (Df.fifo fifoDepth) idC
   |> toDfCircuit dfB where
+
+-- TODO comment
+interconnect ::
+  ( DfConv dfA
+  , DfConv dfB
+  , FwdPayload dfA ~ BwdPayload dfB
+  , BwdPayload dfA ~ FwdPayload dfB
+  , Dom dfA ~ Dom dfB
+  , HiddenClockResetEnable (Dom dfA)
+  , KnownNat numA
+  , KnownNat numB
+  , Bwd dfA ~ Signal (Dom dfA) bwdA ) =>
+  Vec numA (Proxy dfA) ->
+  Vec numB (Proxy dfB) ->
+  (bwdA -> Maybe (Index numB)) ->
+  Circuit (Vec numA (Reverse dfA)) (Vec numB dfB)
+interconnect dfA dfB routeReqFn = Circuit circuitFn where
+  circuitFn (inpA, inpB) = toSignals (innerCircuit $ fmap routeReqFn <$> bundle inpA) (inpA, inpB)
+  innerCircuit routeReqs
+    =  vecFromDfConv dfA
+    |> tupCircuits
+    (  interconnectFwd (Ack False) NoData routeReqs )
+    (  undoDoubleRev $ reverseCircuit $ interconnectBwd (Ack False) NoData routeReqs )
+    |> vecToDfConv dfB
+  undoDoubleRev :: Circuit (Reverse (Vec x (Reverse a))) (Reverse (Vec y (Reverse b))) -> Circuit (Vec x a) (Vec y b)
+  undoDoubleRev = coerceCircuit
 
 -- | Emit values given in list. Emits no data while reset is asserted. Not
 -- synthesizable.
