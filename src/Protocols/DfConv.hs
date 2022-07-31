@@ -37,7 +37,7 @@ module Protocols.DfConv
     -- * Df functions generalized to Dflike
   , convert
   , const, void, pure
-  , map, bimap
+  , mapBwd, map, mapBoth, bimap
   , fst, snd
   , mapMaybe, catMaybes
   , filter
@@ -575,6 +575,22 @@ convert dfA dfB
   =  fromDfCircuit dfA
   |> toDfCircuit dfB
 
+-- | Like 'P.map', but on the backwards data TODO
+mapBwd ::
+  ( DfConv dfA
+  , DfConv dfB
+  , BwdPayload dfA ~ FwdPayload dfB
+  , Dom dfA ~ Dom dfB
+  , HiddenClockResetEnable (Dom dfA) ) =>
+  Proxy dfA ->
+  Proxy dfB ->
+  (BwdPayload dfB -> FwdPayload dfA) ->
+  Circuit (Reverse dfA) dfB
+mapBwd dfA dfB f
+  =  fromDfCircuit dfA
+  |> tupCircuits idC (reverseCircuit $ Df.map f)
+  |> toDfCircuit dfB
+
 -- | Like 'P.map'
 map ::
   ( DfConv dfA
@@ -589,6 +605,22 @@ map ::
 map dfA dfB f
   =  fromDfCircuit dfA
   |> tupCircuits (Df.map f) idC
+  |> toDfCircuit dfB
+
+-- | Like 'P.map', but TODO
+mapBoth ::
+  ( DfConv dfA
+  , DfConv dfB
+  , Dom dfA ~ Dom dfB
+  , HiddenClockResetEnable (Dom dfA) ) =>
+  Proxy dfA ->
+  Proxy dfB ->
+  (BwdPayload dfA -> FwdPayload dfB) ->
+  (BwdPayload dfB -> FwdPayload dfA) ->
+  Circuit (Reverse dfA) dfB
+mapBoth dfA dfB f g
+  =  fromDfCircuit dfA
+  |> tupCircuits (Df.map f) (reverseCircuit $ Df.map g)
   |> toDfCircuit dfB
 
 -- | Like 'P.fst'

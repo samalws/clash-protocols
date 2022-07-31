@@ -166,10 +166,10 @@ type family MShared (c :: AvalonMMManagerConfig) where
   MShared ('AvalonMMManagerConfig _ _ _ a) = a
 
 
--- Class representing a well-behaved shared config.
+-- TODO representing a well-behaved shared config.
 -- This class holds for every possible @AvalonMMSharedConfig@,
 -- but we need to write out the class anyway so that GHC holds.
-class
+type GoodMMSharedConfig config =
   ( KnownNat      (AddrWidth         config)
   , KeepTypeClass (KeepRead          config)
   , KeepTypeClass (KeepWrite         config)
@@ -178,22 +178,12 @@ class
   , KeepTypeClass (KeepReadDataValid config)
   , KeepTypeClass (KeepEndOfPacket   config)
   , KeepTypeClass (KeepIrq           config)
-  ) => GoodMMSharedConfig config
-instance
-  ( KnownNat      (AddrWidth         config)
-  , KeepTypeClass (KeepRead          config)
-  , KeepTypeClass (KeepWrite         config)
-  , MaybeZeroNat  (ByteEnableWidth   config)
-  , MaybeZeroNat  (BurstCountWidth   config)
-  , KeepTypeClass (KeepReadDataValid config)
-  , KeepTypeClass (KeepEndOfPacket   config)
-  , KeepTypeClass (KeepIrq           config)
-  ) => GoodMMSharedConfig config
+  )
 
 -- Class representing a well-behaved subordinate config.
 -- This class holds for every possible @AvalonMMSubordinateConfig@,
 -- but we need to write out the class anyway so that GHC holds.
-class
+type GoodMMSubordinateConfig config =
   ( MaybeZeroNat  (WriteByteEnableWidth   config)
   , KeepTypeClass (KeepChipSelect         config)
   , KeepTypeClass (KeepBeginTransfer      config)
@@ -202,33 +192,17 @@ class
   , KeepTypeClass (KeepReadyForData       config)
   , KeepTypeClass (KeepDataAvailable      config)
   , GoodMMSharedConfig (SShared           config)
-  ) => GoodMMSubordinateConfig config
-instance
-  ( MaybeZeroNat  (WriteByteEnableWidth   config)
-  , KeepTypeClass (KeepChipSelect         config)
-  , KeepTypeClass (KeepBeginTransfer      config)
-  , KeepTypeClass (KeepWaitRequest        config)
-  , KeepTypeClass (KeepBeginBurstTransfer config)
-  , KeepTypeClass (KeepReadyForData       config)
-  , KeepTypeClass (KeepDataAvailable      config)
-  , GoodMMSharedConfig (SShared           config)
-  ) => GoodMMSubordinateConfig config
+  )
 
 -- Class representing a well-behaved manager config.
 -- This class holds for every possible @AvalonMMManagerConfig@,
 -- but we need to write out the class anyway so that GHC holds.
-class
+type GoodMMManagerConfig config =
   ( KeepTypeClass (KeepFlush      config)
   , KnownNat      (IrqListWidth   config)
   , KnownNat      (IrqNumberWidth config)
   , GoodMMSharedConfig (MShared   config)
-  ) => GoodMMManagerConfig config
-instance
-  ( KeepTypeClass (KeepFlush      config)
-  , KnownNat      (IrqListWidth   config)
-  , KnownNat      (IrqNumberWidth config)
-  , GoodMMSharedConfig (MShared   config)
-  ) => GoodMMManagerConfig config
+  )
 
 
 -- Data coming out of an Avalon MM manager port.
@@ -510,174 +484,41 @@ deriving instance (GoodMMSubordinateConfig config,
                    Eq readDataType)
                    => Eq (AvalonSubordinateReadImpt config readDataType)
 
--- Interconnect fabric, which can be used to tie together multiple managers and subordinates.
--- managers and subordinates cannot contact each other directly; this fabric is needed in order to mediate,
---   since managers and subordinates do not have the same data fields.
--- Parameters:
--- * subordinateAddrFns: functions indicating whether a given address refers to a subordinate
--- * irqNums: IRQ numbers for each subordinate
--- * fixedWaitTime: SNat representing the length of the fixed wait-state (0 if there is none) TODO this ought to be part of config
--- TODO support (subordinateA,subordinateB) where a and b have different config
-avalonInterconnectFabric ::
-  ( HiddenClockResetEnable dom
-  , KnownNat fixedWaitTime
-  , KnownNat nmanager
-  , KnownNat nSubordinate
-  , nSubordinate ~ (decNSubordinate + 1)
-  , GoodMMManagerConfig managerConfig
-  , GoodMMSubordinateConfig  subordinateConfig
-  , AddrWidth (MShared managerConfig) ~ AddrWidth (SShared subordinateConfig)
-  , EqOrZero (WriteByteEnableWidth subordinateConfig)      (ByteEnableWidth (MShared managerConfig)) ~ 'True
-  , EqOrZero (ByteEnableWidth (SShared subordinateConfig)) (ByteEnableWidth (MShared managerConfig)) ~ 'True
-  , BurstCountWidth (MShared managerConfig) ~ BurstCountWidth (SShared subordinateConfig)
-  )
-  => Vec nSubordinate (Unsigned (AddrWidth (SShared subordinateConfig)) -> Bool)
-  -> Vec nSubordinate (Unsigned (IrqNumberWidth managerConfig))
-  -> SNat fixedWaitTime
-  -> Circuit
-     (Vec nmanager (AvalonMMManager dom               managerConfig readDataType writeDataType))
-     (Vec nSubordinate  (AvalonMMSubordinate  dom fixedWaitTime subordinateConfig  readDataType writeDataType))
-avalonInterconnectFabric subordinateAddrFns irqNums fixedWaitTime = Circuit cktFn where
-  -- We use a mealy machine, since state is necessary to keep track of which manager is connected to which subordinate.
-  cktFn (inpA, inpB) = (unbundle otpA, unbundle otpB) where (otpA, otpB) = unbundle $ mealy transFn s0 $ bundle (bundle inpA, bundle inpB)
-
-  -- (sm: which subordinate was connected to which manager last clock cycle, xferSt: state for each manager-to-subordinate connection)
-  -- xferSt is indexed by subordinate
-  -- xferSt: Vec (Maybe (ctr1: num waitrequest=false&read=true - num readdatavalid=true, ctr2: xfers left in burst (dec on readdatavalid=true OR waitrequest=false&write=true), ctr3: fixed wait time left (dec always, loop around on good message), ready for transfer (becomes True on waitrequest=false and ctr3=0, False on good message)))
-  -- xferState[subordinate] = Nothing indicates that subordinate is not connected to any manager
-  s0 = (repeat Nothing, repeat Nothing)
-
-  -- transition function, called every clock cycle
-  -- takes in old state and input, returns new state and output
-  transFn (smOld, xferSt) (mo, so) = ((sm, xferSt'), (mi, si)) where
-    -- figure out which subordinate gets paired with which manager, and vice versa
-    (ms, sm) = managerSubordinatePairings mo smOld xferSt
-    -- get the interrupt request number
-    mirq = minIrq so
-    -- get the interrupt list (n subordinates produce n bools; then resize, padding with zeros)
-    irqList = fromKeepTypeDef False . so_irq <$> so
-    -- set IRQ-related fields of a manager-in message using the values calculated above
-    setIrq miMsg = miMsg { mi_irq = toKeepType (Maybe.isJust mirq), mi_irqList = unpack $ resize $ pack irqList, mi_irqNumber = Maybe.fromMaybe 0 mirq }
-    -- calculate all manager-in messages
-    mi = setIrq . maybe mmManagerInNoData (\n -> convSoMi (so !! n) (xferSt !! n)) <$> ms
-    -- calculate all subordinate-in messages
-    si = maybe (const mmSubordinateInNoData) (\n -> convMoSi (mo !! n)) <$> sm <*> xferSt
-    -- calculate the next xferStates
-    xferSt' = modifySt <$> (fmap (mo !!) <$> sm) <*> so <*> xferSt
-
-  -- out of all subordinates with IRQ turned on, return the smallest IRQ number
-  minIrq so = fold minJust $ irqNum <$> so <*> irqNums where
-    minJust (Just a) (Just b) | a < b = Just a
-    minJust (Just a) Nothing = Just a
-    minJust _ b = b
-
-    irqNum soMsg num = if fromKeepTypeDef False (so_irq soMsg) then Just num else Nothing
-
-  -- figure out which manager is paired with which subordinate (ms) and vice versa (sm)
-  -- given current manager-out messages; previous sm value; and all the xferStates
-  managerSubordinatePairings mo smOld xferSt = (ms, sm) where
-    -- for old sm values, determine if they're still transmitting
-    smOld' = (\smOldElem addrFn xferStI -> smOldElem >>= keepSM addrFn xferStI) <$> smOld <*> subordinateAddrFns <*> xferSt
-    -- a transmission is still going if the xferState is Just or if the manager is still asking to connect
-    keepSM addrFn xferStI idx = if (moGood addrFn (mo !! idx)) || Maybe.isJust xferStI then Just idx else Nothing
-    -- get new subordinate-to-manager connections in case a subordinate is disconnectd and a manager wants to connect to it
-    smCurr = (\addrFn -> findIndex (moGood addrFn) mo) <$> subordinateAddrFns
-    -- given addrFn, does manager-out message want to connect to this address?
-    moGood addrFn moMsg = moIsOn moMsg && addrFn (mo_addr moMsg)
-    -- make subordinate-to-manager pairings, preferring existing connections
-    sm = (<|>) <$> smOld' <*> smCurr
-    -- figure out manager-to-subordinate pairings based on sm
-    ms = flip elemIndex sm . Just <$> iterateI (+ 1) 0
-
-  -- mo wants to read or write
-  moIsOn mo = (fromKeepTypeDef True (mo_read mo) || fromKeepTypeDef True (mo_write mo)) && (0 /= fromMaybeEmptyNum 1 (mo_byteEnable mo))
-  -- mo wants to read
-  moIsRead mo = moIsOn mo && fromKeepTypeDef True (mo_read mo) && not (fromKeepTypeDef False (mo_write mo))
-  -- mo wants to write
-  moIsWrite mo = moIsOn mo && fromKeepTypeDef True (mo_write mo) && not (fromKeepTypeDef False (mo_read mo))
-
-  -- modify one xferSt value, given one manager-out message and one subordinate-out message
-  -- if there is no manager connected, our state should be Nothing
-  modifySt Nothing _ _ = Nothing
-  -- if there is a manager connected, give a default value of xferSt if needed, and then call on modifySt' to modify it
-  modifySt (Just mo) so st = modifySt' mo so (Maybe.fromMaybe (0 :: Unsigned 8,
-                                                               mo_burstCount mo,
-                                                               _0 fixedWaitTime,
-                                                               False) st)
-  modifySt' mo so (ctr1, ctr2, ctr3, readyForTransfer) = modifySt'' (optDecCtr so $ optIncCtr1 mo so ctr1,
-                                                                     optDecCtr2 mo so ctr2,
-                                                                     modifyCtr3 mo ctr3,
-                                                                     modifyReadyForTransfer mo so ctr3 readyForTransfer)
-  -- increment ctr1 if we're reading and waitrequest=false
-  optIncCtr1 mo so ctr1 = if shouldIncCtr1 mo so then ctr1+1 else ctr1
-  shouldIncCtr1 mo so = moIsRead mo && not (fromKeepTypeDef False (so_waitRequest so))
-  -- decrement ctr2 if (we're writing and waitrequest=false) or readdatavalid=true
-  optDecCtr2 mo so ctr2 = if (moIsWrite mo && not (fromKeepTypeDef False (so_waitRequest so)) && ctr2 /= 0) then ctr2-1 else optDecCtr so ctr2
-  -- decrement ctr if readdatavalid=true
-  optDecCtr so ctr = if (ctr /= 0) && (fromKeepTypeDef True $ so_readDataValid so) then ctr-1 else ctr
-  -- always decrement ctr3; loop around to maxBound if mo is sending something
-  -- this is for fixed wait state interfaces
-  modifyCtr3 mo 0 = if moIsOn mo then maxBound else 0
-  modifyCtr3 _ n = n-1
-  modifyReadyForTransfer mo so ctr3 readyForTransfer
-    | not (fromKeepTypeDef False (so_waitRequest so)) && ctr3 == 0 = True
-    | moIsOn mo = False
-    | otherwise = readyForTransfer
-  -- finally, kill the xferSt if all the counters are at 0
-  modifySt'' (0, 0, 0, _) = Nothing
-  modifySt'' st = Just st
-  -- hack to get a "0" value of the right type
-  _0 :: (KnownNat n) => SNat n -> Index (n+1)
-  _0 _ = 0
-
-  -- given subordinate-out message and xferSt, generate manager-in message
-  convSoMi so st
-    = AvalonManagerIn
-    { mi_waitRequest   = Maybe.maybe True (\(ctr1,_,ctr3,_) -> ctr1 < maxBound && ctr3 == 0) st && (fromKeepTypeDef False (so_waitRequest so))
-    , mi_readDataValid = convKeepType False (so_readDataValid so)
-    , mi_endOfPacket   = convKeepType False (so_endOfPacket so)
-    , mi_irq           = errorX "interconnect fabric: this value gets overwritten later"
-    , mi_irqList       = errorX "interconnect fabric: this value gets overwritten later"
-    , mi_irqNumber     = errorX "interconnect fabric: this value gets overwritten later"
-    , mi_readData      = so_readData so
-    }
-
-  -- given manager-out message and xferSt, generate subordinate-in message
-  convMoSi mo st
-    = AvalonSubordinateIn
-    { si_addr               = mo_addr mo
-    , si_read               = toKeepType $ fromKeepTypeDef True (mo_read  mo) && not (fromKeepTypeDef False (mo_write mo))
-    , si_write              = toKeepType $ fromKeepTypeDef True (mo_write mo) && not (fromKeepTypeDef False (mo_read  mo))
-    , si_writeByteEnable    = resize $ if (fromKeepTypeDef True (mo_write mo)) then mo_byteEnable mo else 0
-    , si_burstCount         = mo_burstCount mo
-    , si_chipSelect         = toKeepType True
-    , si_byteEnable         = resize $ mo_byteEnable mo
-    , si_beginTransfer      = toKeepType $ moIsOn mo && (Maybe.maybe True (\(_,_,_,readyForMsg) -> readyForMsg) st)
-    , si_beginBurstTransfer = toKeepType $ Maybe.isNothing st
-    , si_writeData          = mo_writeData mo
-    }
-
--- Interconnect fabric, but there's only one manager and one subordinate.
--- Vecs are removed for convenience.
-avalonInterconnectFabricSingleMember ::
-  ( HiddenClockResetEnable dom
-  , KnownNat fixedWaitTime
-  , GoodMMManagerConfig managerConfig
-  , GoodMMSubordinateConfig  subordinateConfig
-  , AddrWidth (MShared managerConfig) ~ AddrWidth (SShared subordinateConfig)
-  , EqOrZero (WriteByteEnableWidth subordinateConfig)      (ByteEnableWidth (MShared managerConfig)) ~ 'True
-  , EqOrZero (ByteEnableWidth (SShared subordinateConfig)) (ByteEnableWidth (MShared managerConfig)) ~ 'True
-  , BurstCountWidth (MShared managerConfig) ~ BurstCountWidth (SShared subordinateConfig)
-  )
-  => (Unsigned (AddrWidth (SShared subordinateConfig)) -> Bool)
-  -> Unsigned (IrqNumberWidth managerConfig)
-  -> SNat fixedWaitTime
-  -> Circuit
-     (AvalonMMManager dom               managerConfig readDataType writeDataType)
-     (AvalonMMSubordinate  dom fixedWaitTime subordinateConfig  readDataType writeDataType)
-avalonInterconnectFabricSingleMember subordinateAddrFn irqNum fixedWaitTime
-  = Circuit ((head *** head) . toSignals (avalonInterconnectFabric (singleton subordinateAddrFn) (singleton irqNum) fixedWaitTime) . (singleton *** singleton))
-
+-- TODO irq, fixed wait time
+interconnectFabric ::
+  forall dom managerConfig subordinateConfig numManager numSubordinate readDataType writeDataType.
+  ( GoodMMManagerConfig managerConfig
+  , GoodMMSubordinateConfig subordinateConfig
+  , MShared managerConfig ~ SShared subordinateConfig
+  , HiddenClockResetEnable dom
+  , KnownNat numManager
+  , KnownNat numSubordinate
+  ) =>
+  (Unsigned (AddrWidth (SShared subordinateConfig)) -> Maybe (Index numSubordinate)) ->
+  Circuit
+    (Vec numManager (AvalonMMManager dom managerConfig readDataType writeDataType))
+    (Vec numSubordinate (AvalonMMSubordinate dom 0 {- TODO (this is the wait time) -} subordinateConfig readDataType writeDataType))
+interconnectFabric addrFn
+  =  undoDoubleReverse (DfConv.interconnect (repeat dfA) (repeat dfC) reqFn)
+  |> vecCircuits (repeat (DfConv.mapBoth dfC dfB undefined undefined))
+ where
+  dfA = Proxy @(AvalonMMManager dom managerConfig readDataType writeDataType)
+  dfB = Proxy @(AvalonMMSubordinate dom 0 subordinateConfig readDataType writeDataType)
+  dfC = Proxy @(Df.Df dom _, Reverse (Df.Df dom _))
+  reqFn (AvalonManagerOut{..})
+    | not (fromKeepTypeDef True mo_read || fromKeepTypeDef True mo_write) = Nothing
+    | otherwise = addrFn mo_addr
+  undoDoubleReverse :: Circuit (Vec x (Reverse (Reverse p))) q -> Circuit (Vec x p) q
+  undoDoubleReverse = coerceCircuit
+{-
+  { mo_addr        = mwi_addr
+  , mo_read        = toKeepType False
+  , mo_write       = toKeepType True
+  , mo_byteEnable  = mwi_byteEnable
+  , mo_burstCount  = mwi_burstCount
+  , mo_flush       = mwi_flush
+  , mo_writeData   = mwi_writeData
+-}
 
 -- Convert a boolean value to an @AvalonSubordinateOut@ structure.
 -- The structure gives no read data, no IRQ, etc.
