@@ -493,32 +493,43 @@ interconnectFabric ::
   , HiddenClockResetEnable dom
   , KnownNat numManager
   , KnownNat numSubordinate
+  , NFDataX readDataType
+  , NFDataX writeDataType
   ) =>
   (Unsigned (AddrWidth (SShared subordinateConfig)) -> Maybe (Index numSubordinate)) ->
   Circuit
     (Vec numManager (AvalonMMManager dom managerConfig readDataType writeDataType))
     (Vec numSubordinate (AvalonMMSubordinate dom 0 {- TODO (this is the wait time) -} subordinateConfig readDataType writeDataType))
 interconnectFabric addrFn
-  =  undoDoubleReverse (DfConv.interconnect (repeat dfA) (repeat dfC) reqFn)
-  |> vecCircuits (repeat (DfConv.mapBoth dfC dfB undefined undefined))
+  =  DfConv.interconnect Proxy dfMiddle reqFn
+  |> vecCircuits (repeat (DfConv.mapBoth dfMiddle Proxy mapFwd mapBwd))
  where
-  dfA = Proxy @(AvalonMMManager dom managerConfig readDataType writeDataType)
-  dfB = Proxy @(AvalonMMSubordinate dom 0 subordinateConfig readDataType writeDataType)
-  dfC = Proxy @(Df.Df dom _, Reverse (Df.Df dom _))
+  dfMiddle = Proxy @(Df.Df dom _, Reverse (Df.Df dom _))
   reqFn (AvalonManagerOut{..})
     | not (fromKeepTypeDef True mo_read || fromKeepTypeDef True mo_write) = Nothing
     | otherwise = addrFn mo_addr
-  undoDoubleReverse :: Circuit (Vec x (Reverse (Reverse p))) q -> Circuit (Vec x p) q
-  undoDoubleReverse = coerceCircuit
-{-
-  { mo_addr        = mwi_addr
-  , mo_read        = toKeepType False
-  , mo_write       = toKeepType True
-  , mo_byteEnable  = mwi_byteEnable
-  , mo_burstCount  = mwi_burstCount
-  , mo_flush       = mwi_flush
-  , mo_writeData   = mwi_writeData
--}
+  mapFwd (Left AvalonManagerReadReqImpt{..})
+    = Left AvalonSubordinateReadReqImpt
+    { srri_addr               = mrri_addr
+    , srri_byteEnable         = mrri_byteEnable
+    , srri_burstCount         = mrri_burstCount
+    , srri_beginTransfer      = undefined -- TODO
+    , srri_beginBurstTransfer = undefined -- TODO
+    }
+  mapFwd (Right AvalonManagerWriteImpt{..})
+    = Right AvalonSubordinateWriteImpt
+    { swi_addr               = mwi_addr
+    , swi_byteEnable         = mwi_byteEnable
+    , swi_burstCount         = mwi_burstCount
+    , swi_beginTransfer      = undefined -- TODO
+    , swi_beginBurstTransfer = undefined -- TODO
+    , swi_writeData          = mwi_writeData
+    }
+  mapBwd AvalonSubordinateReadImpt{..}
+    = AvalonManagerReadImpt
+    { mri_endOfPacket = sri_endOfPacket
+    , mri_readData    = sri_readData
+    }
 
 -- Convert a boolean value to an @AvalonSubordinateOut@ structure.
 -- The structure gives no read data, no IRQ, etc.
@@ -874,36 +885,12 @@ instance (GoodMMManagerConfig config) => Backpressure (AvalonMMManager dom confi
 -- TODO keep waitrequest on when not receiving data?
 
 instance (GoodMMSubordinateConfig config, NFDataX readDataType, NFDataX writeDataType) =>
-  DfConv.DfConv   (Reverse (AvalonMMSubordinate dom 0 config readDataType writeDataType)) where
-  type Dom        (Reverse (AvalonMMSubordinate dom 0 config readDataType writeDataType)) = dom
-  type BwdPayload (Reverse (AvalonMMSubordinate dom 0 config readDataType writeDataType)) = Either (AvalonSubordinateReadReqImpt config) (AvalonSubordinateWriteImpt config writeDataType)
-  type FwdPayload (Reverse (AvalonMMSubordinate dom 0 config readDataType writeDataType)) = AvalonSubordinateReadImpt config readDataType
-
-  toDfCircuit _ = DfConv.toDfCircuitHelper s0 blankOtp stateFn where
-    s0 = False
-    blankOtp = boolToMMSubordinateAck False
-    stateFn si dfAck dfDat = do
-      dfAckSt <- gets (|| dfAck)
-      let (toPut, toRet)
-            = case ( mmSubordinateInToWriteImpt si {- write data -}
-                   , mmSubordinateInToReadReqImpt si {- read request coming in -}
-                   , dfAckSt || dfAck {- df acknowledged read request -}
-                   , dfDat {- df sending read data -}
-                   ) of
-                (Just wi, _, _, _) -> (False, (boolToMMSubordinateAck dfAck, Just (Right wi), False))
-                (Nothing, Just rri, True, Just rdat) -> (False, (mmSubordinateReadDat rdat, if dfAckSt then Nothing else Just (Left rri), True))
-                (Nothing, Just rri, _, _) -> ((dfAckSt || dfAck), (boolToMMSubordinateAck False, if dfAckSt then Nothing else Just (Left rri), False))
-                (Nothing, Nothing, _, _) -> (False, (boolToMMSubordinateAck False, Nothing, False))
-      put toPut
-      pure toRet
-
-instance (GoodMMSubordinateConfig config, NFDataX readDataType, NFDataX writeDataType) =>
   DfConv.DfConv   (AvalonMMSubordinate dom 0 config readDataType writeDataType) where
   type Dom        (AvalonMMSubordinate dom 0 config readDataType writeDataType) = dom
   type BwdPayload (AvalonMMSubordinate dom 0 config readDataType writeDataType) = AvalonSubordinateReadImpt config readDataType
   type FwdPayload (AvalonMMSubordinate dom 0 config readDataType writeDataType) = Either (AvalonSubordinateReadReqImpt config) (AvalonSubordinateWriteImpt config writeDataType)
 
-  toDfCircuit _ = DfConv.toDfCircuitHelper s0 blankOtp stateFn where
+  toDfCircuit proxy = DfConv.toDfCircuitHelper proxy s0 blankOtp stateFn where
     s0 = Nothing
     blankOtp = mmSubordinateInNoData
     stateFn so dfAck dfDat = do
@@ -921,13 +908,31 @@ instance (GoodMMSubordinateConfig config, NFDataX readDataType, NFDataX writeDat
       put toPut
       pure (toRetSi, readDatStored, toRetAck)
 
+  fromDfCircuit proxy = DfConv.fromDfCircuitHelper proxy s0 blankOtp stateFn where
+    s0 = False
+    blankOtp = boolToMMSubordinateAck False
+    stateFn si dfAck dfDat = do
+      dfAckSt <- gets (|| dfAck)
+      let (toPut, toRet)
+            = case ( mmSubordinateInToWriteImpt si {- write data -}
+                   , mmSubordinateInToReadReqImpt si {- read request coming in -}
+                   , dfAckSt || dfAck {- df acknowledged read request -}
+                   , dfDat {- df sending read data -}
+                   ) of
+                (Just wi, _, _, _) -> (False, (boolToMMSubordinateAck dfAck, Just (Right wi), False))
+                (Nothing, Just rri, True, Just rdat) -> (False, (mmSubordinateReadDat rdat, if dfAckSt then Nothing else Just (Left rri), True))
+                (Nothing, Just rri, _, _) -> ((dfAckSt || dfAck), (boolToMMSubordinateAck False, if dfAckSt then Nothing else Just (Left rri), False))
+                (Nothing, Nothing, _, _) -> (False, (boolToMMSubordinateAck False, Nothing, False))
+      put toPut
+      pure toRet
+
 instance (GoodMMManagerConfig config, NFDataX readDataType, NFDataX writeDataType) =>
   DfConv.DfConv   (AvalonMMManager dom config readDataType writeDataType) where
   type Dom        (AvalonMMManager dom config readDataType writeDataType) = dom
   type BwdPayload (AvalonMMManager dom config readDataType writeDataType) = AvalonManagerReadImpt config readDataType
   type FwdPayload (AvalonMMManager dom config readDataType writeDataType) = Either (AvalonManagerReadReqImpt config) (AvalonManagerWriteImpt config writeDataType)
 
-  toDfCircuit _ = DfConv.toDfCircuitHelper s0 blankOtp stateFn where
+  toDfCircuit proxy = DfConv.toDfCircuitHelper proxy s0 blankOtp stateFn where
     s0 = Nothing
     blankOtp = mmManagerOutNoData
     stateFn mi dfAck dfDat = do
@@ -945,13 +950,7 @@ instance (GoodMMManagerConfig config, NFDataX readDataType, NFDataX writeDataTyp
       put toPut
       pure (toRetMo, readDatStored, toRetAck)
 
-instance (GoodMMManagerConfig config, NFDataX readDataType, NFDataX writeDataType) =>
-  DfConv.DfConv   (Reverse (AvalonMMManager dom config readDataType writeDataType)) where
-  type Dom        (Reverse (AvalonMMManager dom config readDataType writeDataType)) = dom
-  type BwdPayload (Reverse (AvalonMMManager dom config readDataType writeDataType)) = Either (AvalonManagerReadReqImpt config) (AvalonManagerWriteImpt config writeDataType)
-  type FwdPayload (Reverse (AvalonMMManager dom config readDataType writeDataType)) = AvalonManagerReadImpt config readDataType
-
-  toDfCircuit _ = DfConv.toDfCircuitHelper s0 blankOtp stateFn where
+  fromDfCircuit proxy = DfConv.fromDfCircuitHelper proxy s0 blankOtp stateFn where
     s0 = False
     blankOtp = boolToMMManagerAck False
     stateFn mo dfAck dfDat = do
@@ -982,7 +981,6 @@ instance (GoodMMManagerConfig config, NFDataX writeDataType, NFDataX readDataTyp
 
   stallC conf (head -> (stallAck, stalls))
     = withClockResetEnable clockGen resetGen enableGen
-    $ (coerceCircuit :: Circuit (Reverse (Reverse a)) b -> Circuit a b)
     $ DfConv.stall Proxy Proxy conf stallAck stalls
 
 instance (GoodMMSubordinateConfig config, NFDataX writeDataType, NFDataX readDataType, KnownDomain dom) =>
@@ -998,7 +996,6 @@ instance (GoodMMSubordinateConfig config, NFDataX writeDataType, NFDataX readDat
 
   stallC conf (head -> (stallAck, stalls))
     = withClockResetEnable clockGen resetGen enableGen
-    $ (coerceCircuit :: Circuit (Reverse (Reverse a)) b -> Circuit a b)
     $ DfConv.stall Proxy Proxy conf stallAck stalls
 
 -- NOTE: Unfortunately, we can't write a 'Drivable' instance (and, by extension, a 'Test' instance) for 'AvalonMMManager' or 'AvalonMMSubordinate'.

@@ -579,13 +579,13 @@ convert dfA dfB
 mapBwd ::
   ( DfConv dfA
   , DfConv dfB
-  , BwdPayload dfA ~ FwdPayload dfB
+  , FwdPayload dfA ~ FwdPayload dfB
   , Dom dfA ~ Dom dfB
   , HiddenClockResetEnable (Dom dfA) ) =>
   Proxy dfA ->
   Proxy dfB ->
-  (BwdPayload dfB -> FwdPayload dfA) ->
-  Circuit (Reverse dfA) dfB
+  (BwdPayload dfB -> BwdPayload dfA) ->
+  Circuit dfA dfB
 mapBwd dfA dfB f
   =  fromDfCircuit dfA
   |> tupCircuits idC (reverseCircuit $ Df.map f)
@@ -615,9 +615,9 @@ mapBoth ::
   , HiddenClockResetEnable (Dom dfA) ) =>
   Proxy dfA ->
   Proxy dfB ->
-  (BwdPayload dfA -> FwdPayload dfB) ->
-  (BwdPayload dfB -> FwdPayload dfA) ->
-  Circuit (Reverse dfA) dfB
+  (FwdPayload dfA -> FwdPayload dfB) ->
+  (BwdPayload dfB -> BwdPayload dfA) ->
+  Circuit dfA dfB
 mapBoth dfA dfB f g
   =  fromDfCircuit dfA
   |> tupCircuits (Df.map f) (reverseCircuit $ Df.map g)
@@ -1253,17 +1253,17 @@ fifo dfA dfB fifoDepth
 interconnect ::
   ( DfConv dfA
   , DfConv dfB
-  , FwdPayload dfA ~ BwdPayload dfB
-  , BwdPayload dfA ~ FwdPayload dfB
+  , BwdPayload dfA ~ BwdPayload dfB
+  , FwdPayload dfA ~ FwdPayload dfB
   , Dom dfA ~ Dom dfB
   , HiddenClockResetEnable (Dom dfA)
   , KnownNat numA
   , KnownNat numB
-  , Bwd dfA ~ Signal (Dom dfA) bwdA ) =>
-  Vec numA (Proxy dfA) ->
-  Vec numB (Proxy dfB) ->
-  (bwdA -> Maybe (Index numB)) ->
-  Circuit (Vec numA (Reverse dfA)) (Vec numB dfB)
+  , Fwd dfA ~ Signal (Dom dfA) fwdA ) =>
+  Proxy dfA ->
+  Proxy dfB ->
+  (fwdA -> Maybe (Index numB)) ->
+  Circuit (Vec numA dfA) (Vec numB dfB)
 interconnect dfA dfB routeReqFn = Circuit circuitFn where
   circuitFn (inpA, inpB) = toSignals (innerCircuit $ fmap routeReqFn <$> bundle inpA) (inpA, inpB)
   innerCircuit routeReqs
