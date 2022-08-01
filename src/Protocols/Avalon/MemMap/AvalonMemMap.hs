@@ -499,7 +499,7 @@ interconnectFabric ::
     (Vec numManager (AvalonMMManager dom managerConfig readDataType writeDataType))
     (Vec numSubordinate (AvalonMMSubordinate dom 0 {- TODO (this is the wait time) -} subordinateConfig readDataType writeDataType))
 interconnectFabric addrFn
-  =  undoDoubleReverse (DfConv.interconnect (repeat dfA) (repeat dfC) reqFn)
+  =  coerceCircuit (DfConv.interconnect (repeat dfA) (repeat dfC) reqFn)
   |> vecCircuits (repeat (DfConv.mapBoth dfC dfB undefined undefined))
  where
   dfA = Proxy @(AvalonMMManager dom managerConfig readDataType writeDataType)
@@ -508,8 +508,10 @@ interconnectFabric addrFn
   reqFn (AvalonManagerOut{..})
     | not (fromKeepTypeDef True mo_read || fromKeepTypeDef True mo_write) = Nothing
     | otherwise = addrFn mo_addr
+{-
   undoDoubleReverse :: Circuit (Vec x (Reverse (Reverse p))) q -> Circuit (Vec x p) q
   undoDoubleReverse = coerceCircuit
+-}
 {-
   { mo_addr        = mwi_addr
   , mo_read        = toKeepType False

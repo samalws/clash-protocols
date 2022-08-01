@@ -202,6 +202,19 @@ instance DfConv (Df dom a, Reverse (Df dom b)) where
   type FwdPayload (Df dom a, Reverse (Df dom b)) = a
   toDfCircuit _ = Circuit swap
 
+-- TODO keep?
+instance DfConv (Reverse (Df dom a), Df dom b) where
+  type Dom        (Reverse (Df dom a), Df dom b) = dom
+  type BwdPayload (Reverse (Df dom a), Df dom b) = a
+  type FwdPayload (Reverse (Df dom a), Df dom b) = b
+  toDfCircuit _ = Circuit (swap . (swap *** swap))
+
+instance DfConv (Reverse (Df dom a, Reverse (Df dom b))) where
+  type Dom        (Reverse (Df dom a, Reverse (Df dom b))) = dom
+  type BwdPayload (Reverse (Df dom a, Reverse (Df dom b))) = a
+  type FwdPayload (Reverse (Df dom a, Reverse (Df dom b))) = b
+  toDfCircuit _ = Circuit (swap . (swap *** swap))
+
 
 -- DfConv instances for Df
 
@@ -580,6 +593,70 @@ vecToTup = Circuit ((g *** f) . swap) where
   f (x :> y :> Nil) = (x,y)
   f _ = undefined -- to suppress warning
   g (x,y) = x :> y :> Nil
+
+{-
+-- TODO
+todoNameThis ::
+  forall dfA dfB.
+  ( DfConv dfA
+  , DfConv dfB
+  , Dom dfA ~ Dom dfB
+  , HiddenClockResetEnable (Dom dfA) ) =>
+  Proxy dfA ->
+  Proxy dfB ->
+  Circuit dfA (Reverse dfB) ->
+  Circuit
+    (Df (Dom dfA) (FwdPayload dfA, FwdPayload dfB))
+    (Df (Dom dfA) (BwdPayload dfA, BwdPayload dfB))
+todoNameThis pxyA pxyB = todoA . todoB pxyA pxyB
+
+todoA ::
+  (HiddenClockResetEnable dom) =>
+  Circuit (Df dom a, Reverse (Df dom b)) (Df dom c, Reverse (Df dom d)) ->
+  Circuit (Df dom (a,d)) (Df dom (b,c))
+todoA inpCirc = Circuit (a $ toSignals inpCirc) where
+  a :: (((Signal dom (Data a), Signal dom Ack),
+         (Signal dom Ack, Signal dom (Data d)))
+        -> ((Signal dom Ack, Signal dom (Data b)),
+            (Signal dom (Data c), Signal dom Ack)))
+       -> (Signal dom (Data (a, d)), Signal dom Ack)
+       -> (Signal dom Ack, Signal dom (Data (b, c)))
+-}
+
+-- we don't want the above, since using only one Df forces there to only be one Ack
+todoB ::
+  forall dfA dfB.
+  ( DfConv dfA
+  , DfConv dfB
+  , Dom dfA ~ Dom dfB
+  , HiddenClockResetEnable (Dom dfA) ) =>
+  Proxy dfA ->
+  Proxy dfB ->
+  Circuit dfA (Reverse dfB) -> -- TODO what??? so we cant run this on map for example??
+  Circuit
+    (Df (Dom dfA) (FwdPayload dfA), Reverse (Df (Dom dfA) (BwdPayload dfA)))
+    (Df (Dom dfB) (BwdPayload dfB), Reverse (Df (Dom dfB) (FwdPayload dfB))) -- TODO huh????
+todoB pxyA pxyB circ = a |> circ |> b where
+  a :: Circuit
+       (Df (Dom dfB) (FwdPayload dfA),
+        Reverse (Df (Dom dfB) (BwdPayload dfA)))
+       dfA
+  a = toDfCircuit pxyA
+  b :: Circuit
+       (Reverse dfB)
+       (Df (Dom dfB) (BwdPayload dfB),
+        Reverse (Df (Dom dfB) (FwdPayload dfB)))
+  b = fromDfCircuit pxyB
+
+{-
+todoB pxyA pxyB circ = undoDoubleRevInp (reverseCircuit (convert Proxy Proxy)) |> circ |> _ (reverseCircuit (convert Proxy Proxy)) where
+  f :: Circuit (Reverse (Reverse (Df (Dom dfA) x), Df (Dom dfA) y)) q -> Circuit (Df (Dom dfA) x, Reverse (Df (Dom dfA) y)) q
+  f = coerceCircuit
+  undoDoubleRevInp :: Circuit (Reverse (Reverse xa)) ya -> Circuit xa ya
+  undoDoubleRevInp = coerceCircuit
+  undoDoubleRevOtp :: Circuit yb (Reverse (Reverse xb)) -> Circuit yb xb
+  undoDoubleRevOtp = coerceCircuit
+-}
 
 -- | Preserves 'Df' data unmodified. Potentially useful for converting between
 -- protocols.
@@ -1370,7 +1447,7 @@ simulate ::
   ( Clock (Dom dfA) ->
     Reset (Dom dfA) ->
     Enable (Dom dfA) ->
-    Circuit dfA (Reverse dfB) ) ->
+    Circuit dfA (Reverse dfB) ) -> -- TODO wait what?? so we can't run this on map????????? I'm so confused
   -- | Inputs
   [Maybe (FwdPayload dfA)] ->
   -- | Outputs
