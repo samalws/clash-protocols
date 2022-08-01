@@ -739,6 +739,16 @@ class
   , C.ShowX (KeepType keep Bool)
   , NFData (KeepType keep Bool)
   , C.NFDataX (KeepType keep Bool)
+  , Eq (KeepType keep (C.Unsigned 32))
+  , Show (KeepType keep (C.Unsigned 32))
+  , C.ShowX (KeepType keep (C.Unsigned 32))
+  , NFData (KeepType keep (C.Unsigned 32))
+  , C.NFDataX (KeepType keep (C.Unsigned 32))
+  , Eq (KeepType keep (Maybe (C.Unsigned 6)))
+  , Show (KeepType keep (Maybe (C.Unsigned 6)))
+  , C.ShowX (KeepType keep (Maybe (C.Unsigned 6)))
+  , NFData (KeepType keep (Maybe (C.Unsigned 6)))
+  , C.NFDataX (KeepType keep (Maybe (C.Unsigned 6)))
   ) => KeepTypeClass (keep :: Bool) where
   -- | Get the value of @keep@ at the term level.
   getKeep :: KeepType keep optionalType -> Bool
