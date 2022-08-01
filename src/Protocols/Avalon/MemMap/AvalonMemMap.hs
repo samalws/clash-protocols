@@ -63,7 +63,10 @@ type EqOrZero a b = (a ==? b) ||? (a ==? 0)
 -- @Nat@ values represent the width of a variable-sized numeric field.
 data AvalonMMSharedConfig
   =  AvalonMMSharedConfig
-  { addrWidth         :: Nat
+  { dataWidth         :: Nat
+  , keepReadData      :: Bool
+  , keepWriteData     :: Bool
+  , addrWidth         :: Nat
   , keepRead          :: Bool
   , keepWrite         :: Bool
   , byteEnableWidth   :: Nat
@@ -72,7 +75,6 @@ data AvalonMMSharedConfig
   , keepBurstCount    :: Bool
   , keepReadDataValid :: Bool
   , keepEndOfPacket   :: Bool
-  , keepIrq           :: Bool -- TODO move to subordinate
   }
 
 -- Config specific to Avalon MM subordinate interfaces.
@@ -81,7 +83,7 @@ data AvalonMMSharedConfig
 -- An @AvalonMMSharedConfig@ is also included for the rest of the fields.
 data AvalonMMSubordinateConfig
   =  AvalonMMSubordinateConfig
-  { writeByteEnableWidth   :: Nat
+  { keepAddr               :: Bool
   , keepWriteByteEnable    :: Bool
   , keepChipSelect         :: Bool
   , keepBeginTransfer      :: Bool
@@ -89,6 +91,7 @@ data AvalonMMSubordinateConfig
   , keepBeginBurstTransfer :: Bool
   , keepReadyForData       :: Bool
   , keepDataAvailable      :: Bool
+  , keepIrq                :: Bool
   , sShared                :: AvalonMMSharedConfig
   }
 
@@ -106,63 +109,72 @@ data AvalonMMManagerConfig
 
 -- Grab record fields at the type level:
 
+type family DataWidth (c :: AvalonMMSharedConfig) where
+  DataWidth ('AvalonMMSharedConfig a _ _ _ _ _ _ _ _ _ _ _) = a
+
+type family KeepReadData (c :: AvalonMMSharedConfig) where
+  KeepReadData ('AvalonMMSharedConfig _ a _ _ _ _ _ _ _ _ _ _) = a
+
+type family KeepWriteData (c :: AvalonMMSharedConfig) where
+  KeepWriteData ('AvalonMMSharedConfig _ _ a _ _ _ _ _ _ _ _ _) = a
+
 type family AddrWidth (c :: AvalonMMSharedConfig) where
-  AddrWidth ('AvalonMMSharedConfig a _ _ _ _ _ _ _ _ _) = a
+  AddrWidth ('AvalonMMSharedConfig _ _ _ a _ _ _ _ _ _ _ _) = a
 
 type family KeepRead (c :: AvalonMMSharedConfig) where
-  KeepRead ('AvalonMMSharedConfig _ a _ _ _ _ _ _ _ _) = a
+  KeepRead ('AvalonMMSharedConfig _ _ _ _ a _ _ _ _ _ _ _) = a
 
 type family KeepWrite (c :: AvalonMMSharedConfig) where
-  KeepWrite ('AvalonMMSharedConfig _ _ a _ _ _ _ _ _ _) = a
+  KeepWrite ('AvalonMMSharedConfig _ _ _ _ _ a _ _ _ _ _ _) = a
 
 type family ByteEnableWidth (c :: AvalonMMSharedConfig) where
-  ByteEnableWidth ('AvalonMMSharedConfig _ _ _ a _ _ _ _ _ _) = a
+  ByteEnableWidth ('AvalonMMSharedConfig _ _ _ _ _ _ a _ _ _ _ _) = a
 
 type family KeepByteEnable (c :: AvalonMMSharedConfig) where
-  KeepByteEnable ('AvalonMMSharedConfig _ _ _ _ a _ _ _ _ _) = a
+  KeepByteEnable ('AvalonMMSharedConfig _ _ _ _ _ _ _ a _ _ _ _) = a
 
 type family BurstCountWidth (c :: AvalonMMSharedConfig) where
-  BurstCountWidth ('AvalonMMSharedConfig _ _ _ _ _ a _ _ _ _) = a
+  BurstCountWidth ('AvalonMMSharedConfig _ _ _ _ _ _ _ _ a _ _ _) = a
 
 type family KeepBurstCount (c :: AvalonMMSharedConfig) where
-  KeepBurstCount ('AvalonMMSharedConfig _ _ _ _ _ _ a _ _ _) = a
+  KeepBurstCount ('AvalonMMSharedConfig _ _ _ _ _ _ _ _ _ a _ _) = a
 
 type family KeepReadDataValid (c :: AvalonMMSharedConfig) where
-  KeepReadDataValid ('AvalonMMSharedConfig _ _ _ _ _ _ _ a _ _) = a
+  KeepReadDataValid ('AvalonMMSharedConfig _ _ _ _ _ _ _ _ _ _ a _) = a
 
 type family KeepEndOfPacket (c :: AvalonMMSharedConfig) where
-  KeepEndOfPacket ('AvalonMMSharedConfig _ _ _ _ _ _ _ _ a _) = a
-
-type family KeepIrq (c :: AvalonMMSharedConfig) where
-  KeepIrq ('AvalonMMSharedConfig _ _ _ _ _ _ _ _ _ a) = a
+  KeepEndOfPacket ('AvalonMMSharedConfig _ _ _ _ _ _ _ _ _ _ _ a) = a
 
 
-type family WriteByteEnableWidth (c :: AvalonMMSubordinateConfig) where
-  WriteByteEnableWidth ('AvalonMMSubordinateConfig a _ _ _ _ _ _ _ _) = a
+type family KeepAddr (c :: AvalonMMSubordinateConfig) where
+  KeepAddr ('AvalonMMSubordinateConfig a _ _ _ _ _ _ _ _ _) = a
 
 type family KeepWriteByteEnable (c :: AvalonMMSubordinateConfig) where
-  KeepWriteByteEnable ('AvalonMMSubordinateConfig _ a _ _ _ _ _ _ _) = a
+  KeepWriteByteEnable ('AvalonMMSubordinateConfig _ a _ _ _ _ _ _ _ _) = a
 
 type family KeepChipSelect (c :: AvalonMMSubordinateConfig) where
-  KeepChipSelect ('AvalonMMSubordinateConfig _ _ a _ _ _ _ _ _) = a
+  KeepChipSelect ('AvalonMMSubordinateConfig _ _ a _ _ _ _ _ _ _) = a
 
 type family KeepBeginTransfer (c :: AvalonMMSubordinateConfig) where
-  KeepBeginTransfer ('AvalonMMSubordinateConfig _ _ _ a _ _ _ _ _) = a
+  KeepBeginTransfer ('AvalonMMSubordinateConfig _ _ _ a _ _ _ _ _ _) = a
 
 type family KeepWaitRequest (c :: AvalonMMSubordinateConfig) where
-  KeepWaitRequest ('AvalonMMSubordinateConfig _ _ _ _ a _ _ _ _) = a
+  KeepWaitRequest ('AvalonMMSubordinateConfig _ _ _ _ a _ _ _ _ _) = a
 
 type family KeepBeginBurstTransfer (c :: AvalonMMSubordinateConfig) where
-  KeepBeginBurstTransfer ('AvalonMMSubordinateConfig _ _ _ _ _ a _ _ _) = a
+  KeepBeginBurstTransfer ('AvalonMMSubordinateConfig _ _ _ _ _ a _ _ _ _) = a
 
 type family KeepReadyForData (c :: AvalonMMSubordinateConfig) where
-  KeepReadyForData ('AvalonMMSubordinateConfig _ _ _ _ _ _ a _ _) = a
+  KeepReadyForData ('AvalonMMSubordinateConfig _ _ _ _ _ _ a _ _ _) = a
 
 type family KeepDataAvailable (c :: AvalonMMSubordinateConfig) where
-  KeepDataAvailable ('AvalonMMSubordinateConfig _ _ _ _ _ _ _ a _) = a
+  KeepDataAvailable ('AvalonMMSubordinateConfig _ _ _ _ _ _ _ a _ _) = a
+
+type family KeepIrq (c :: AvalonMMSubordinateConfig) where
+  KeepIrq ('AvalonMMSubordinateConfig _ _ _ _ _ _ _ _ a _) = a
 
 type family SShared (c :: AvalonMMSubordinateConfig) where
-  SShared ('AvalonMMSubordinateConfig _ _ _ _ _ _ _ _ a) = a
+  SShared ('AvalonMMSubordinateConfig _ _ _ _ _ _ _ _ _ a) = a
 
 
 type family KeepFlush (c :: AvalonMMManagerConfig) where
@@ -182,23 +194,49 @@ type family MShared (c :: AvalonMMManagerConfig) where
 -- This class holds for every possible @AvalonMMSharedConfig@,
 -- but we need to write out the class anyway so that GHC holds.
 type GoodMMSharedConfig config =
-  ( KnownNat      (AddrWidth         config)
+  ( KnownNat      (DataWidth         config)
+  , KeepTypeClass (KeepReadData      config)
+  , KeepTypeClass (KeepWriteData     config)
+  , KnownNat      (AddrWidth         config)
   , KeepTypeClass (KeepRead          config)
   , KeepTypeClass (KeepWrite         config)
-  , MaybeZeroNat  (ByteEnableWidth   config)
+  , KnownNat      (ByteEnableWidth   config)
   , KeepTypeClass (KeepByteEnable    config)
-  , MaybeZeroNat  (BurstCountWidth   config)
+  , KnownNat      (BurstCountWidth   config)
   , KeepTypeClass (KeepBurstCount    config)
   , KeepTypeClass (KeepReadDataValid config)
   , KeepTypeClass (KeepEndOfPacket   config)
-  , KeepTypeClass (KeepIrq           config)
+
+  , NFDataX (KeepType (KeepReadData config) (Unsigned (DataWidth config)))
+  , NFData  (KeepType (KeepReadData config) (Unsigned (DataWidth config)))
+  , ShowX   (KeepType (KeepReadData config) (Unsigned (DataWidth config)))
+  , Show    (KeepType (KeepReadData config) (Unsigned (DataWidth config)))
+  , Eq      (KeepType (KeepReadData config) (Unsigned (DataWidth config)))
+
+  , NFDataX (KeepType (KeepWriteData config) (Unsigned (DataWidth config)))
+  , NFData  (KeepType (KeepWriteData config) (Unsigned (DataWidth config)))
+  , ShowX   (KeepType (KeepWriteData config) (Unsigned (DataWidth config)))
+  , Show    (KeepType (KeepWriteData config) (Unsigned (DataWidth config)))
+  , Eq      (KeepType (KeepWriteData config) (Unsigned (DataWidth config)))
+
+  , NFDataX (KeepType (KeepByteEnable config) (Unsigned (ByteEnableWidth config)))
+  , NFData  (KeepType (KeepByteEnable config) (Unsigned (ByteEnableWidth config)))
+  , ShowX   (KeepType (KeepByteEnable config) (Unsigned (ByteEnableWidth config)))
+  , Show    (KeepType (KeepByteEnable config) (Unsigned (ByteEnableWidth config)))
+  , Eq      (KeepType (KeepByteEnable config) (Unsigned (ByteEnableWidth config)))
+
+  , NFDataX (KeepType (KeepBurstCount config) (Unsigned (BurstCountWidth config)))
+  , NFData  (KeepType (KeepBurstCount config) (Unsigned (BurstCountWidth config)))
+  , ShowX   (KeepType (KeepBurstCount config) (Unsigned (BurstCountWidth config)))
+  , Show    (KeepType (KeepBurstCount config) (Unsigned (BurstCountWidth config)))
+  , Eq      (KeepType (KeepBurstCount config) (Unsigned (BurstCountWidth config)))
   )
 
 -- Class representing a well-behaved subordinate config.
 -- This class holds for every possible @AvalonMMSubordinateConfig@,
 -- but we need to write out the class anyway so that GHC holds.
 type GoodMMSubordinateConfig config =
-  ( MaybeZeroNat  (WriteByteEnableWidth   config)
+  ( KeepTypeClass (KeepAddr               config)
   , KeepTypeClass (KeepWriteByteEnable    config)
   , KeepTypeClass (KeepChipSelect         config)
   , KeepTypeClass (KeepBeginTransfer      config)
@@ -206,7 +244,20 @@ type GoodMMSubordinateConfig config =
   , KeepTypeClass (KeepBeginBurstTransfer config)
   , KeepTypeClass (KeepReadyForData       config)
   , KeepTypeClass (KeepDataAvailable      config)
+  , KeepTypeClass (KeepIrq                config)
   , GoodMMSharedConfig (SShared           config)
+
+  , NFDataX (KeepType (KeepAddr config) (Unsigned (AddrWidth (SShared config))))
+  , NFData  (KeepType (KeepAddr config) (Unsigned (AddrWidth (SShared config))))
+  , ShowX   (KeepType (KeepAddr config) (Unsigned (AddrWidth (SShared config))))
+  , Show    (KeepType (KeepAddr config) (Unsigned (AddrWidth (SShared config))))
+  , Eq      (KeepType (KeepAddr config) (Unsigned (AddrWidth (SShared config))))
+
+  , NFDataX (KeepType (KeepWriteByteEnable config) (Unsigned (ByteEnableWidth (SShared config))))
+  , NFData  (KeepType (KeepWriteByteEnable config) (Unsigned (ByteEnableWidth (SShared config))))
+  , ShowX   (KeepType (KeepWriteByteEnable config) (Unsigned (ByteEnableWidth (SShared config))))
+  , Show    (KeepType (KeepWriteByteEnable config) (Unsigned (ByteEnableWidth (SShared config))))
+  , Eq      (KeepType (KeepWriteByteEnable config) (Unsigned (ByteEnableWidth (SShared config))))
   )
 
 -- Class representing a well-behaved manager config.
@@ -217,6 +268,18 @@ type GoodMMManagerConfig config =
   , KeepTypeClass (KeepIrqList   config)
   , KeepTypeClass (KeepIrqNumber config)
   , GoodMMSharedConfig (MShared  config)
+
+  , NFDataX (KeepType (KeepIrqList config) (Unsigned 32))
+  , NFData  (KeepType (KeepIrqList config) (Unsigned 32))
+  , ShowX   (KeepType (KeepIrqList config) (Unsigned 32))
+  , Show    (KeepType (KeepIrqList config) (Unsigned 32))
+  , Eq      (KeepType (KeepIrqList config) (Unsigned 32))
+
+  , NFDataX (KeepType (KeepIrqNumber config) (Maybe (Unsigned 6)))
+  , NFData  (KeepType (KeepIrqNumber config) (Maybe (Unsigned 6)))
+  , ShowX   (KeepType (KeepIrqNumber config) (Maybe (Unsigned 6)))
+  , Show    (KeepType (KeepIrqNumber config) (Maybe (Unsigned 6)))
+  , Eq      (KeepType (KeepIrqNumber config) (Maybe (Unsigned 6)))
   )
 
 
@@ -259,7 +322,6 @@ data AvalonManagerIn config readDataType
   { mi_waitRequest   :: Bool
   , mi_readDataValid :: KeepType (KeepReadDataValid (MShared config)) Bool
   , mi_endOfPacket   :: KeepType (KeepEndOfPacket   (MShared config)) Bool
-  , mi_irq           :: KeepType (KeepIrq           (MShared config)) Bool -- TODO remove this
   , mi_irqList       :: KeepType (KeepIrqList                config) (Unsigned 32)
   , mi_irqNumber     :: KeepType (KeepIrqNumber              config) (Maybe (Unsigned 6))
   , mi_readData      :: readDataType
@@ -364,10 +426,10 @@ data AvalonSubordinateOut config readDataType
   =  AvalonSubordinateOut
   { so_readDataValid :: KeepType (KeepReadDataValid (SShared config)) Bool
   , so_endOfPacket   :: KeepType (KeepEndOfPacket   (SShared config)) Bool
-  , so_irq           :: KeepType (KeepIrq           (SShared config)) Bool
   , so_waitRequest   :: KeepType (KeepWaitRequest            config) Bool
   , so_readyForData  :: KeepType (KeepReadyForData           config) Bool
   , so_dataAvailable :: KeepType (KeepDataAvailable          config) Bool
+  , so_irq           :: KeepType (KeepIrq                    config) Bool
   , so_readData      :: readDataType
   }
   deriving (Generic, Bundle)
@@ -393,12 +455,12 @@ deriving instance (GoodMMSubordinateConfig config,
 -- All fields are optional and can be toggled using the config.
 data AvalonSubordinateIn config writeDataType
   = AvalonSubordinateIn
-  { si_addr               :: Unsigned (AddrWidth              (SShared config))
+  { si_addr               :: KeepType (KeepAddr config) (Unsigned (AddrWidth (SShared config)))
   , si_read               :: KeepType (KeepRead               (SShared config)) Bool
   , si_write              :: KeepType (KeepWrite              (SShared config)) Bool
-  , si_byteEnable         :: KeepType (KeepByteEnable         (SShared config)) (Unsigned (ByteEnableWidth        (SShared config)))
-  , si_burstCount         :: KeepType (KeepBurstCount         (SShared config)) (Unsigned (BurstCountWidth        (SShared config)))
-  , si_writeByteEnable    :: KeepType (KeepWriteByteEnable             config) (Unsigned (WriteByteEnableWidth            config))
+  , si_byteEnable         :: KeepType (KeepByteEnable         (SShared config)) (Unsigned (ByteEnableWidth (SShared config)))
+  , si_burstCount         :: KeepType (KeepBurstCount         (SShared config)) (Unsigned (BurstCountWidth (SShared config)))
+  , si_writeByteEnable    :: KeepType (KeepWriteByteEnable             config)  (Unsigned (ByteEnableWidth (SShared config)))
   , si_chipSelect         :: KeepType (KeepChipSelect                  config) Bool
   , si_beginTransfer      :: KeepType (KeepBeginTransfer               config) Bool
   , si_beginBurstTransfer :: KeepType (KeepBeginBurstTransfer          config) Bool
@@ -426,7 +488,7 @@ deriving instance (GoodMMSubordinateConfig config,
 -- TODO
 data AvalonSubordinateWriteImpt config writeDataType
   = AvalonSubordinateWriteImpt
-  { swi_addr               :: Unsigned (AddrWidth              (SShared config))
+  { swi_addr               :: KeepType (KeepAddr config) (Unsigned (AddrWidth (SShared config)))
   , swi_byteEnable         :: KeepType (KeepByteEnable         (SShared config)) (Unsigned (ByteEnableWidth        (SShared config)))
   , swi_burstCount         :: KeepType (KeepBurstCount         (SShared config)) (Unsigned (BurstCountWidth        (SShared config)))
   , swi_beginTransfer      :: KeepType (KeepBeginTransfer               config) Bool
@@ -455,7 +517,7 @@ deriving instance (GoodMMSubordinateConfig config,
 -- TODO
 data AvalonSubordinateReadReqImpt config
   = AvalonSubordinateReadReqImpt
-  { srri_addr               :: Unsigned (AddrWidth              (SShared config))
+  { srri_addr               :: KeepType (KeepAddr config) (Unsigned (AddrWidth (SShared config)))
   , srri_byteEnable         :: KeepType (KeepByteEnable         (SShared config)) (Unsigned (ByteEnableWidth        (SShared config)))
   , srri_burstCount         :: KeepType (KeepBurstCount         (SShared config)) (Unsigned (BurstCountWidth        (SShared config)))
   , srri_beginTransfer      :: KeepType (KeepBeginTransfer               config) Bool
@@ -525,7 +587,7 @@ interconnectFabric addrFn
     | otherwise = addrFn mo_addr
   mapFwd (Left AvalonManagerReadReqImpt{..})
     = Left AvalonSubordinateReadReqImpt
-    { srri_addr               = mrri_addr
+    { srri_addr               = toKeepType mrri_addr
     , srri_byteEnable         = mrri_byteEnable
     , srri_burstCount         = mrri_burstCount
     , srri_beginTransfer      = undefined -- TODO
@@ -533,7 +595,7 @@ interconnectFabric addrFn
     }
   mapFwd (Right AvalonManagerWriteImpt{..})
     = Right AvalonSubordinateWriteImpt
-    { swi_addr               = mwi_addr
+    { swi_addr               = toKeepType mwi_addr
     , swi_byteEnable         = mwi_byteEnable
     , swi_burstCount         = mwi_burstCount
     , swi_beginTransfer      = undefined -- TODO
@@ -722,7 +784,6 @@ boolToMMManagerAck ack
   { mi_waitRequest   = not ack
   , mi_readDataValid = toKeepType False
   , mi_endOfPacket   = toKeepType False
-  , mi_irq           = toKeepType False
   , mi_irqList       = toKeepType 0
   , mi_irqNumber     = toKeepType Nothing
   , mi_readData      = errorX "No readData for boolToAck"
@@ -735,7 +796,6 @@ mmManagerInNoData
   { mi_waitRequest   = False
   , mi_readDataValid = toKeepType False
   , mi_endOfPacket   = toKeepType False
-  , mi_irq           = toKeepType False
   , mi_irqList       = toKeepType 0
   , mi_irqNumber     = toKeepType Nothing
   , mi_readData      = errorX "No read data defined"
@@ -748,7 +808,6 @@ mmManagerReadDat dat
   { mi_waitRequest   = False
   , mi_readDataValid = toKeepType True
   , mi_endOfPacket   = mri_endOfPacket dat
-  , mi_irq           = toKeepType False
   , mi_irqList       = toKeepType 0
   , mi_irqNumber     = toKeepType Nothing
   , mi_readData      = mri_readData dat
@@ -764,7 +823,7 @@ mmSubordinateInNoData :: (GoodMMSubordinateConfig config) => AvalonSubordinateIn
 mmSubordinateInNoData
   = AvalonSubordinateIn
   { si_chipSelect         = toKeepType False
-  , si_addr               = 0
+  , si_addr               = toKeepType 0
   , si_read               = toKeepType False
   , si_write              = toKeepType False
   , si_byteEnable         = toKeepType 0
@@ -780,7 +839,7 @@ mmSubordinateInReadingData :: (GoodMMSubordinateConfig config) => AvalonSubordin
 mmSubordinateInReadingData
   = AvalonSubordinateIn
   { si_chipSelect         = toKeepType False
-  , si_addr               = 0
+  , si_addr               = toKeepType 0
   , si_read               = toKeepType True
   , si_write              = toKeepType False
   , si_byteEnable         = toKeepType 0
@@ -833,7 +892,7 @@ mmSubordinateInSendingData :: (GoodMMSubordinateConfig config) => AvalonSubordin
 mmSubordinateInSendingData
   = AvalonSubordinateIn
   { si_chipSelect         = toKeepType True
-  , si_addr               = 0
+  , si_addr               = toKeepType 0
   , si_read               = toKeepType False
   , si_write              = toKeepType True
   , si_byteEnable         = toKeepType $ bitCoerce $ repeat True
