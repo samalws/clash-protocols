@@ -776,22 +776,6 @@ fromKeepTypeDef deflt val = fromMaybe deflt (fromKeepType val)
 convKeepType :: (KeepTypeClass a, KeepTypeClass b) => t -> KeepType a t -> KeepType b t
 convKeepType b = toKeepType . fromKeepTypeDef b
 
--- | Another class that holds for all possible values.
--- In this case, we want to grab a number value of width @n@ if @n@ is nonzero.
--- Otherwise we provide a default value.
-class (C.KnownNat n) => MaybeZeroNat (n :: C.Nat) where
-  -- Grab a number value of width @n@ if @n@ is nonzero.
-  -- Otherwise use a default value.
-  -- The output number is size @n+1@ to simplify the definition
-  -- and allow for the @n=0@ case to provide a number.
-  fromMaybeEmptyNum :: C.Unsigned (n C.+ 1) -> C.Unsigned n -> C.Unsigned (n C.+ 1)
-
-instance MaybeZeroNat 0 where
-  fromMaybeEmptyNum n _ = n
-
-instance (1 C.<= n, C.KnownNat n) => MaybeZeroNat n where
-  fromMaybeEmptyNum _ m = C.resize m
-
 -- | Protocol to reverse a circuit.
 -- 'Fwd' becomes 'Bwd' and vice versa.
 -- No changes are made otherwise.
