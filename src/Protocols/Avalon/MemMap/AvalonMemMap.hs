@@ -15,13 +15,78 @@ but rather gets send "outwards" to whoever is controlling the reset signal of th
 {-# LANGUAGE TypeFamilyDependencies #-}
 {-# LANGUAGE UndecidableInstances #-}
 
-module Protocols.Avalon.MemMap.AvalonMemMap where
+module Protocols.Avalon.MemMap.AvalonMemMap
+  ( AvalonMMSharedConfig(..)
+  , AvalonMMSubordinateConfig(..)
+  , AvalonMMManagerConfig(..)
+
+  , DataWidth
+  , KeepReadData
+  , KeepWriteData
+  , AddrWidth
+  , KeepRead
+  , KeepWrite
+  , ByteEnableWidth
+  , KeepByteEnable
+  , BurstCountWidth
+  , KeepBurstCount
+  , KeepReadDataValid
+  , KeepEndOfPacket
+
+  , KeepAddr
+  , KeepWriteByteEnable
+  , KeepChipSelect
+  , KeepBeginTransfer
+  , KeepWaitRequest
+  , KeepBeginBurstTransfer
+  , KeepReadyForData
+  , KeepDataAvailable
+  , KeepIrq
+  , SShared
+
+  , KeepFlush
+  , KeepIrqList
+  , KeepIrqNumber
+  , MShared
+
+  , RemoveNonDfSubordinate 
+  , RemoveNonDfManager 
+
+  , GoodMMSharedConfig
+  , GoodMMSubordinateConfig
+  , GoodMMManagerConfig
+
+  , AvalonManagerOut
+  , AvalonManagerIn
+  , AvalonSubordinateOut
+  , AvalonSubordinateIn
+
+  , AvalonManagerWriteImpt
+  , AvalonManagerReadReqImpt
+  , AvalonManagerReadImpt
+  , AvalonSubordinateWriteImpt
+  , AvalonSubordinateReadReqImpt
+  , AvalonSubordinateReadImpt
+
+  , interconnectFabric
+
+  , managerOutAddNonDf
+  , managerOutRemoveNonDf
+  , managerInAddNonDf
+  , managerInRemoveNonDf
+  , subordinateOutAddNonDf
+  , subordinateOutRemoveNonDf
+  , subordinateInAddNonDf
+  , subordinateInRemoveNonDf
+
+  , AvalonMMManager(..)
+  , AvalonMMSubordinate(..)
+
+  ) where
 
 -- base
--- import           Prelude hiding (not, (&&), (||), repeat, (!!), foldl, unzip, head)
-import qualified Prelude as P
+import Prelude ()
 
-import           Control.Arrow ((***), (&&&))
 import           Control.Monad.State (put, gets)
 import           Control.DeepSeq (NFData)
 import qualified Data.Maybe as Maybe
@@ -34,8 +99,6 @@ import qualified Clash.Prelude as C
 -- me
 import           Protocols.Internal
 import qualified Protocols.DfConv as DfConv
-import qualified Protocols.Df as Df
-import           Protocols.Hedgehog.Internal
 
 
 -- Config needed for both manager and subordinate interfaces.
@@ -523,7 +586,9 @@ deriving instance (GoodMMSubordinateConfig config)
 deriving instance (GoodMMSubordinateConfig config)
                    => Eq (AvalonSubordinateReadImpt config)
 
--- -- TODO flush, begintransfer, writeByteEnable, fixed wait time
+-- TODO remove some constraints
+-- TOOD remove the forall
+-- TOOD single member
 interconnectFabric ::
   forall dom managerConfig subordinateConfig numManager numSubordinate decNumSub fixedWaitTime.
   ( GoodMMManagerConfig managerConfig
@@ -534,13 +599,6 @@ interconnectFabric ::
   , KnownNat numManager
   , KnownNat numSubordinate
   , numSubordinate ~ (decNumSub + 1) ) =>
-{-
-  Vec numSubordinate (Unsigned 6) ->
-  (Unsigned (AddrWidth (SShared subordinateConfig)) -> Maybe (Index numSubordinate)) ->
-  Circuit
-    (Vec numManager (AvalonMMManager dom managerConfig))
-    (Vec numSubordinate (AvalonMMSubordinate dom 0 {- TODO (this is the wait time) -} subordinateConfig))
--}
   Vec numSubordinate (Unsigned (AddrWidth (SShared subordinateConfig)) -> Bool) ->
   Vec numSubordinate (Unsigned 6) ->
   SNat fixedWaitTime ->
@@ -665,108 +723,20 @@ interconnectFabric subordinateAddrFns irqNums fixedWaitTime = Circuit cktFn wher
     , si_beginBurstTransfer = toKeepType $ Maybe.isNothing st
     , si_writeData          = mo_writeData mo
     }
-{-
-interconnectFabric irqNums addrFn = Circuit circuitFn
- where
-  circuitFn (mgrInps, subInps) =
-    let (realSubInps, subExtraStuff) = unzip $ unbundle . fmap subordinateOutRemoveNonDf <$> subInps
-        irqsSignal = fmap (\(_, _, a) -> a) <$> bundle subExtraStuff
-        managerIrqs = (calcIrqList &&& calcIrqNumber) <$> irqsSignal
-        (mgrOtps, subOtps) = toSignals fullDfComponent (fmap managerOutRemoveNonDf <$> mgrInps, realSubInps)
-        otps' = pure ((managerInAddNonDf <$> managerIrqs) <*>) <*> mgrOtps
-    in (otps', fmap subordinateInAddNonDf <$> subOtps)
-
-  calcIrqList = toKeepType . unpack . resize . pack . fmap (fromKeepTypeDef False)
-
-  calcIrqNumber irqs = toKeepType $ fold minJust $ irqNum <$> irqNums <*> irqs where
-    minJust (Just a) (Just b) | a < b = Just a
-    minJust (Just a) Nothing = Just a
-    minJust _ b = b
-
-    irqNum num irq
-      | fromKeepTypeDef False irq = Just num
-      | otherwise = Nothing
-
-  fullDfComponent ::
-    Circuit
-      (Vec numManager (AvalonMMManager dom (RemoveNonDfManager managerConfig)))
-      (Vec numSubordinate (AvalonMMSubordinate dom 0 {- TODO (this is the wait time) -} (RemoveNonDfSubordinate subordinateConfig)))
-  fullDfComponent
-    =  DfConv.interconnect Proxy dfMiddle reqFn
-    |> vecCircuits (repeat (DfConv.mapBoth dfMiddle Proxy mapBwd mapFwd))
-
-  dfMiddle = Proxy @(Df.Df dom _, Reverse (Df.Df dom _))
-
-  reqFn (AvalonManagerOut{..})
-    | not (fromKeepTypeDef True mo_read || fromKeepTypeDef True mo_write) = Nothing
-    | otherwise = addrFn mo_addr
-
-  mapBwd (Left AvalonManagerReadReqImpt{..})
-    = Left AvalonSubordinateReadReqImpt
-    { srri_addr               = toKeepType mrri_addr
-    , srri_byteEnable         = mrri_byteEnable
-    , srri_burstCount         = mrri_burstCount
-    }
-  mapBwd (Right AvalonManagerWriteImpt{..})
-    = Right AvalonSubordinateWriteImpt
-    { swi_addr               = toKeepType mwi_addr
-    , swi_byteEnable         = mwi_byteEnable
-    , swi_burstCount         = mwi_burstCount
-    , swi_writeData          = mwi_writeData
-    }
-
-  mapFwd AvalonSubordinateReadImpt{..}
-    = AvalonManagerReadImpt
-    { mri_endOfPacket = sri_endOfPacket
-    , mri_readData    = sri_readData
-    }
--}
 
 managerOutAddNonDf ::
-{-
-  ( GoodMMManagerConfig cfgA
-  , GoodMMManagerConfig cfgB
-  , KeepFlush cfgA ~ KeepFlush cfgB
-  , MShared cfgA ~ MShared cfgB
-  , KeepIrqList cfgA ~ 'False
-  , KeepIrqNumber cfgA ~ 'False ) =>
-  AvalonManagerOut cfgA ->
-  AvalonManagerOut cfgB
--}
   GoodMMManagerConfig cfg =>
   AvalonManagerOut (RemoveNonDfManager cfg) ->
   AvalonManagerOut cfg
 managerOutAddNonDf AvalonManagerOut{..} = AvalonManagerOut{..}
 
 managerOutRemoveNonDf ::
-{-
-  ( GoodMMManagerConfig cfgA
-  , GoodMMManagerConfig cfgB
-  , KeepFlush cfgA ~ KeepFlush cfgB
-  , MShared cfgA ~ MShared cfgB
-  , KeepIrqList cfgA ~ 'False
-  , KeepIrqNumber cfgA ~ 'False ) =>
-  AvalonManagerOut cfgB ->
-  AvalonManagerOut cfgA
--}
   GoodMMManagerConfig cfg =>
   AvalonManagerOut cfg ->
   AvalonManagerOut (RemoveNonDfManager cfg)
 managerOutRemoveNonDf AvalonManagerOut{..} = AvalonManagerOut{..}
 
 managerInAddNonDf ::
-{-
-  ( GoodMMManagerConfig cfgA
-  , GoodMMManagerConfig cfgB
-  , KeepFlush cfgA ~ KeepFlush cfgB
-  , MShared cfgA ~ MShared cfgB
-  , KeepIrqList cfgA ~ 'False
-  , KeepIrqNumber cfgA ~ 'False ) =>
-  ( KeepType (KeepIrqList cfgB) (Unsigned 32)
-  , KeepType (KeepIrqNumber cfgB) (Maybe (Unsigned 6)) ) ->
-  AvalonManagerIn cfgA ->
-  AvalonManagerIn cfgB
--}
   GoodMMManagerConfig cfg =>
   ( KeepType (KeepIrqList cfg) (Unsigned 32)
   , KeepType (KeepIrqNumber cfg) (Maybe (Unsigned 6)) ) ->
@@ -780,18 +750,6 @@ managerInAddNonDf (irqList, irqNumber) AvalonManagerIn{..}
   }
 
 managerInRemoveNonDf ::
-{-
-  ( GoodMMManagerConfig cfgA
-  , GoodMMManagerConfig cfgB
-  , KeepFlush cfgA ~ KeepFlush cfgB
-  , MShared cfgA ~ MShared cfgB
-  , KeepIrqList cfgA ~ 'False
-  , KeepIrqNumber cfgA ~ 'False ) =>
-  AvalonManagerIn cfgB ->
-  ( AvalonManagerIn cfgA
-  , ( KeepType (KeepIrqList cfgB) (Unsigned 32)
-    , KeepType (KeepIrqNumber cfgB) (Maybe (Unsigned 6)) ) )
--}
   GoodMMManagerConfig cfg =>
   AvalonManagerIn cfg ->
   ( AvalonManagerIn (RemoveNonDfManager cfg)
@@ -805,25 +763,6 @@ managerInRemoveNonDf AvalonManagerIn{..}
   }, (mi_irqList, mi_irqNumber))
 
 subordinateOutAddNonDf ::
-{-
-  ( GoodMMSubordinateConfig cfgA
-  , GoodMMSubordinateConfig cfgB
-  , KeepAddr cfgA ~ KeepAddr cfgB
-  , KeepWriteByteEnable cfgA ~ KeepWriteByteEnable cfgB
-  , KeepChipSelect cfgA ~ KeepChipSelect cfgB
-  , KeepBeginTransfer cfgA ~ KeepBeginTransfer cfgB
-  , KeepWaitRequest cfgA ~ KeepWaitRequest cfgB
-  , KeepBeginBurstTransfer cfgA ~ KeepBeginBurstTransfer cfgB
-  , SShared cfgA ~ SShared cfgB
-  , KeepReadyForData cfgA ~ 'False
-  , KeepDataAvailable cfgA ~ 'False
-  , KeepIrq cfgA ~ 'False ) =>
-  ( KeepType (KeepReadyForData cfgB) Bool
-  , KeepType (KeepDataAvailable cfgB) Bool
-  , KeepType (KeepIrq cfgB) Bool ) ->
-  AvalonSubordinateOut cfgA ->
-  AvalonSubordinateOut cfgB
--}
   GoodMMSubordinateConfig cfg =>
   ( KeepType (KeepReadyForData cfg) Bool
   , KeepType (KeepDataAvailable cfg) Bool
@@ -839,25 +778,6 @@ subordinateOutAddNonDf (readyForData, dataAvailable, irq) AvalonSubordinateOut{.
   }
 
 subordinateOutRemoveNonDf ::
-{-
-  ( GoodMMSubordinateConfig cfgA
-  , GoodMMSubordinateConfig cfgB
-  , KeepAddr cfgA ~ KeepAddr cfgB
-  , KeepWriteByteEnable cfgA ~ KeepWriteByteEnable cfgB
-  , KeepChipSelect cfgA ~ KeepChipSelect cfgB
-  , KeepBeginTransfer cfgA ~ KeepBeginTransfer cfgB
-  , KeepWaitRequest cfgA ~ KeepWaitRequest cfgB
-  , KeepBeginBurstTransfer cfgA ~ KeepBeginBurstTransfer cfgB
-  , SShared cfgA ~ SShared cfgB
-  , KeepReadyForData cfgA ~ 'False
-  , KeepDataAvailable cfgA ~ 'False
-  , KeepIrq cfgA ~ 'False ) =>
-  AvalonSubordinateOut cfgB ->
-  ( AvalonSubordinateOut cfgA
-  , ( KeepType (KeepReadyForData cfgB) Bool
-    , KeepType (KeepDataAvailable cfgB) Bool
-    , KeepType (KeepIrq cfgB) Bool ) )
--}
   GoodMMSubordinateConfig cfg =>
   AvalonSubordinateOut cfg ->
   ( AvalonSubordinateOut (RemoveNonDfSubordinate cfg)
@@ -873,42 +793,12 @@ subordinateOutRemoveNonDf AvalonSubordinateOut{..}
   }, (so_readyForData, so_dataAvailable, so_irq))
 
 subordinateInAddNonDf ::
-{-
-  ( GoodMMSubordinateConfig cfgA
-  , GoodMMSubordinateConfig cfgB
-  , KeepAddr cfgA ~ KeepAddr cfgB
-  , KeepWriteByteEnable cfgA ~ KeepWriteByteEnable cfgB
-  , KeepChipSelect cfgA ~ KeepChipSelect cfgB
-  , KeepBeginTransfer cfgA ~ KeepBeginTransfer cfgB
-  , KeepWaitRequest cfgA ~ KeepWaitRequest cfgB
-  , KeepBeginBurstTransfer cfgA ~ KeepBeginBurstTransfer cfgB
-  , SShared cfgA ~ SShared cfgB
-  , KeepReadyForData cfgA ~ 'False
-  , KeepDataAvailable cfgA ~ 'False
-  , KeepIrq cfgA ~ 'False ) =>
-  AvalonSubordinateIn cfgA ->
-  AvalonSubordinateIn cfgB
--}
   GoodMMSubordinateConfig cfg =>
   AvalonSubordinateIn (RemoveNonDfSubordinate cfg) ->
   AvalonSubordinateIn cfg
 subordinateInAddNonDf AvalonSubordinateIn{..} = AvalonSubordinateIn{..}
 
 subordinateInRemoveNonDf ::
-{-
-  ( GoodMMSubordinateConfig cfgA
-  , GoodMMSubordinateConfig cfgB
-  , KeepAddr cfgA ~ KeepAddr cfgB
-  , KeepWriteByteEnable cfgA ~ KeepWriteByteEnable cfgB
-  , KeepChipSelect cfgA ~ KeepChipSelect cfgB
-  , KeepBeginTransfer cfgA ~ KeepBeginTransfer cfgB
-  , KeepWaitRequest cfgA ~ KeepWaitRequest cfgB
-  , KeepBeginBurstTransfer cfgA ~ KeepBeginBurstTransfer cfgB
-  , SShared cfgA ~ SShared cfgB
-  , KeepReadyForData cfgA ~ 'False
-  , KeepDataAvailable cfgA ~ 'False
-  , KeepIrq cfgA ~ 'False ) =>
--}
   GoodMMSubordinateConfig cfg =>
   AvalonSubordinateIn cfg ->
   AvalonSubordinateIn (RemoveNonDfSubordinate cfg)
@@ -941,11 +831,6 @@ mmSubordinateReadDat dat
     , so_irq           = toKeepType False
     , so_readData      = sri_readData dat
     }
-
--- TODO
-mmSubordinateOutToReadData :: (GoodMMSubordinateConfig config) => AvalonSubordinateOut config -> Maybe (KeepType (KeepReadData (SShared config)) (Unsigned (DataWidth (SShared config))))
-mmSubordinateOutToReadData so
-  = if (fromKeepTypeDef True (so_readDataValid so) && not (fromKeepTypeDef False (so_waitRequest so))) then Just (so_readData so) else Nothing
 
 mmSubordinateOutToReadImpt :: (GoodMMSubordinateConfig config) => AvalonSubordinateOut config -> Maybe (AvalonSubordinateReadImpt config)
 mmSubordinateOutToReadImpt (AvalonSubordinateOut{..})
@@ -1119,11 +1004,6 @@ mmManagerReadDat dat
   , mi_readData      = mri_readData dat
   }
 
--- TODO
-mmManagerInToReadData :: (GoodMMManagerConfig config) => AvalonManagerIn config -> Maybe (KeepType (KeepReadData (MShared config)) (Unsigned (DataWidth (MShared config))))
-mmManagerInToReadData mi
-  = if (fromKeepTypeDef True (mi_readDataValid mi) && not (mi_waitRequest mi)) then Just (mi_readData mi) else Nothing
-
 -- An @AvalonSubordinateIn@ containing no write data, and indicating that no transmission is currently occurring.
 mmSubordinateInNoData :: (GoodMMSubordinateConfig config) => AvalonSubordinateIn config
 mmSubordinateInNoData
@@ -1131,22 +1011,6 @@ mmSubordinateInNoData
   { si_chipSelect         = toKeepType False
   , si_addr               = toKeepType 0
   , si_read               = toKeepType False
-  , si_write              = toKeepType False
-  , si_byteEnable         = toKeepType 0
-  , si_writeByteEnable    = toKeepType 0
-  , si_beginTransfer      = toKeepType False
-  , si_burstCount         = toKeepType 0
-  , si_beginBurstTransfer = toKeepType False
-  , si_writeData          = errorX "No writeData for noData"
-  }
-
--- An @AvalonSubordinateIn@ TODO
-mmSubordinateInReadingData :: (GoodMMSubordinateConfig config) => AvalonSubordinateIn config
-mmSubordinateInReadingData
-  = AvalonSubordinateIn
-  { si_chipSelect         = toKeepType False
-  , si_addr               = toKeepType 0
-  , si_read               = toKeepType True
   , si_write              = toKeepType False
   , si_byteEnable         = toKeepType 0
   , si_writeByteEnable    = toKeepType 0
@@ -1169,19 +1033,6 @@ mmManagerOutNoData
   , mo_writeData   = errorX "No writeData for noData"
   }
 
--- An @AvalonManagerOut@ TODO
-mmManagerOutReadingData :: (GoodMMManagerConfig config) => AvalonManagerOut config
-mmManagerOutReadingData
-  = AvalonManagerOut
-  { mo_addr        = 0
-  , mo_read        = toKeepType True
-  , mo_write       = toKeepType False
-  , mo_byteEnable  = toKeepType 0
-  , mo_burstCount  = toKeepType 0
-  , mo_flush       = toKeepType False
-  , mo_writeData   = errorX "No writeData for noData"
-  }
-
 -- Grab the "acknowledgement" value from an @AvalonSubordinateOut@.
 -- Reasonable defaults are provided for optional fields.
 mmSubordinateOutToBool :: (GoodMMSubordinateConfig config) => AvalonSubordinateOut config -> Bool
@@ -1191,54 +1042,6 @@ mmSubordinateOutToBool so = fromKeepTypeDef True (so_readyForData so) && not (fr
 -- Reasonable defaults are provided for optional fields.
 mmManagerInToBool :: (GoodMMManagerConfig config) => AvalonManagerIn config -> Bool
 mmManagerInToBool = not . mi_waitRequest
-
--- Default @AvalonSubordinateIn@ whose fields indicate that a write transaction is occurring.
--- The @writeData@ field needs to be filled in with data.
-mmSubordinateInSendingData :: (GoodMMSubordinateConfig config) => AvalonSubordinateIn config
-mmSubordinateInSendingData
-  = AvalonSubordinateIn
-  { si_chipSelect         = toKeepType True
-  , si_addr               = toKeepType 0
-  , si_read               = toKeepType False
-  , si_write              = toKeepType True
-  , si_byteEnable         = toKeepType $ bitCoerce $ repeat True
-  , si_writeByteEnable    = toKeepType $ bitCoerce $ repeat True
-  , si_beginTransfer      = toKeepType False
-  , si_burstCount         = toKeepType 0
-  , si_beginBurstTransfer = toKeepType False
-  , si_writeData          = errorX "No writeData for mmSubordinateInSendingData"
-  }
-
--- Default @AvalonManagerOut@ whose fields indicate that a write transaction is occurring.
--- The @writeData@ field needs to be filled in with data.
-mmManagerOutSendingData :: (GoodMMManagerConfig config) => AvalonManagerOut config
-mmManagerOutSendingData
-  = AvalonManagerOut
-  { mo_addr        = 0
-  , mo_read        = toKeepType False
-  , mo_write       = toKeepType True
-  , mo_byteEnable  = toKeepType $ bitCoerce $ repeat True
-  , mo_burstCount  = toKeepType 1
-  , mo_flush       = toKeepType False
-  , mo_writeData   = errorX "No writeData for mmManagerOutSendingData"
-  }
-
-
--- Grab the data from an @AvalonSubordinateIn@, if there is any.
-mmSubordinateInToMaybe :: (GoodMMSubordinateConfig config) => AvalonSubordinateIn config -> Maybe (KeepType (KeepWriteData (SShared config)) (Unsigned (DataWidth (SShared config))))
-mmSubordinateInToMaybe si = if cond then Just (si_writeData si) else Nothing where
-  cond =  fromKeepTypeDef True (si_chipSelect si)
-       && fromKeepTypeDef True (si_write si)
-       && not (fromKeepTypeDef False (si_read si))
-       && 0 /= fromKeepTypeDef 1 (si_byteEnable si)
-       && 0 /= fromKeepTypeDef 1 (si_writeByteEnable si)
-
--- Grab the data from an @AvalonManagerOut@, if there is any.
-mmManagerOutToMaybe :: (GoodMMManagerConfig config) => AvalonManagerOut config -> Maybe (KeepType (KeepWriteData (MShared config)) (Unsigned (DataWidth (MShared config))))
-mmManagerOutToMaybe mo = if cond then Just (mo_writeData mo) else Nothing where
-  cond =  fromKeepTypeDef True (mo_write mo)
-       && not (fromKeepTypeDef False (mo_read mo))
-       && 0 /= fromKeepTypeDef 1 (mo_byteEnable mo)
 
 -- TODO support fixed wait time in instances below
 
