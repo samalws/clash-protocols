@@ -537,32 +537,44 @@ interconnectFabric ::
   Circuit
     (Vec numManager (AvalonMMManager dom managerConfig))
     (Vec numSubordinate (AvalonMMSubordinate dom 0 {- TODO (this is the wait time) -} subordinateConfig))
-interconnectFabric addrFn
-  =  DfConv.interconnect Proxy dfMiddle reqFn
-  |> vecCircuits (repeat (DfConv.mapBoth dfMiddle Proxy mapFwd mapBwd))
+interconnectFabric addrFn = Circuit circuitFn
  where
+  circuitFn (mgrInps, subInps) =
+    let (realSubInps, subExtraStuff) = unzip $ unbundle . fmap subordinateOutRemoveNonDf <$> subInps
+        irqsSignal = fmap (\(_, _, a) -> a) <$> bundle subExtraStuff
+        managerIrqs = const (toKeepType 0, toKeepType Nothing) <$> irqsSignal
+        (mgrOtps, subOtps) = toSignals fullDfComponent (fmap managerOutRemoveNonDf <$> mgrInps, realSubInps)
+        -- otps' = unbundle $ pure ((managerInAddNonDf <$> pure (toKeepType 0, toKeepType Nothing)) <*>) <*> bundle mgrOtps
+        otps' = pure ((managerInAddNonDf <$> managerIrqs) <*>) <*> mgrOtps
+    in (otps', fmap subordinateInAddNonDf <$> subOtps)
+
+  -- fmap managerInAddNonDf <$> 
+
+  fullDfComponent ::
+    Circuit
+      (Vec numManager (AvalonMMManager dom (RemoveNonDfManager managerConfig)))
+      (Vec numSubordinate (AvalonMMSubordinate dom 0 {- TODO (this is the wait time) -} (RemoveNonDfSubordinate subordinateConfig)))
+  fullDfComponent
+    =  DfConv.interconnect Proxy dfMiddle reqFn
+    |> vecCircuits (repeat (DfConv.mapBoth dfMiddle Proxy mapBwd mapFwd))
   dfMiddle = Proxy @(Df.Df dom _, Reverse (Df.Df dom _))
   reqFn (AvalonManagerOut{..})
     | not (fromKeepTypeDef True mo_read || fromKeepTypeDef True mo_write) = Nothing
     | otherwise = addrFn mo_addr
-  mapFwd (Left AvalonManagerReadReqImpt{..})
+  mapBwd (Left AvalonManagerReadReqImpt{..})
     = Left AvalonSubordinateReadReqImpt
     { srri_addr               = toKeepType mrri_addr
     , srri_byteEnable         = mrri_byteEnable
     , srri_burstCount         = mrri_burstCount
-    , srri_beginTransfer      = undefined -- TODO
-    , srri_beginBurstTransfer = undefined -- TODO
     }
-  mapFwd (Right AvalonManagerWriteImpt{..})
+  mapBwd (Right AvalonManagerWriteImpt{..})
     = Right AvalonSubordinateWriteImpt
     { swi_addr               = toKeepType mwi_addr
     , swi_byteEnable         = mwi_byteEnable
     , swi_burstCount         = mwi_burstCount
-    , swi_beginTransfer      = undefined -- TODO
-    , swi_beginBurstTransfer = undefined -- TODO
     , swi_writeData          = mwi_writeData
     }
-  mapBwd AvalonSubordinateReadImpt{..}
+  mapFwd AvalonSubordinateReadImpt{..}
     = AvalonManagerReadImpt
     { mri_endOfPacket = sri_endOfPacket
     , mri_readData    = sri_readData
@@ -1110,7 +1122,7 @@ instance (GoodMMManagerConfig config) => Backpressure (AvalonMMManager dom confi
 
 -- TODO keep waitrequest on when not receiving data?
 
-instance (GoodMMSubordinateConfig config) =>
+instance (GoodMMSubordinateConfig config, config ~ RemoveNonDfSubordinate config) =>
   DfConv.DfConv   (AvalonMMSubordinate dom 0 config) where
   type Dom        (AvalonMMSubordinate dom 0 config) = dom
   type BwdPayload (AvalonMMSubordinate dom 0 config) = AvalonSubordinateReadImpt config
@@ -1152,7 +1164,7 @@ instance (GoodMMSubordinateConfig config) =>
       put toPut
       pure toRet
 
-instance (GoodMMManagerConfig config) =>
+instance (GoodMMManagerConfig config, config ~ RemoveNonDfManager config) =>
   DfConv.DfConv   (AvalonMMManager dom config) where
   type Dom        (AvalonMMManager dom config) = dom
   type BwdPayload (AvalonMMManager dom config) = AvalonManagerReadImpt config
@@ -1194,7 +1206,7 @@ instance (GoodMMManagerConfig config) =>
       put toPut
       pure toRet
 
-instance (GoodMMManagerConfig config, KnownDomain dom) =>
+instance (GoodMMManagerConfig config, KnownDomain dom, config ~ RemoveNonDfManager config) =>
   Simulate (AvalonMMManager dom config) where
   type SimulateFwdType (AvalonMMManager dom config) = [AvalonManagerOut config]
   type SimulateBwdType (AvalonMMManager dom config) = [AvalonManagerIn config]
@@ -1209,7 +1221,7 @@ instance (GoodMMManagerConfig config, KnownDomain dom) =>
     = withClockResetEnable clockGen resetGen enableGen
     $ DfConv.stall Proxy Proxy conf stallAck stalls
 
-instance (GoodMMSubordinateConfig config, KnownDomain dom) =>
+instance (GoodMMSubordinateConfig config, KnownDomain dom, config ~ RemoveNonDfSubordinate config) =>
   Simulate (AvalonMMSubordinate dom 0 config) where
   type SimulateFwdType (AvalonMMSubordinate dom 0 config) = [AvalonSubordinateIn config]
   type SimulateBwdType (AvalonMMSubordinate dom 0 config) = [AvalonSubordinateOut config]
