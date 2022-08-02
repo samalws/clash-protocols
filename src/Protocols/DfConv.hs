@@ -37,7 +37,7 @@ module Protocols.DfConv
     -- * Df functions generalized to Dflike
   , convert
   , const, void, pure
-  , mapBwd, map, mapBoth, bimap
+  , map, bimap
   , fst, snd
   , mapMaybe, catMaybes
   , filter
@@ -61,7 +61,6 @@ module Protocols.DfConv
   , registerFwd
   , registerBwd
   , fifo
-  , interconnect
 
     -- * Simulation functions
   , drive
@@ -575,22 +574,6 @@ convert dfA dfB
   =  fromDfCircuit dfA
   |> toDfCircuit dfB
 
--- | Like 'P.map', but on the backwards data TODO
-mapBwd ::
-  ( DfConv dfA
-  , DfConv dfB
-  , FwdPayload dfA ~ FwdPayload dfB
-  , Dom dfA ~ Dom dfB
-  , HiddenClockResetEnable (Dom dfA) ) =>
-  Proxy dfA ->
-  Proxy dfB ->
-  (BwdPayload dfB -> BwdPayload dfA) ->
-  Circuit dfA dfB
-mapBwd dfA dfB f
-  =  fromDfCircuit dfA
-  |> tupCircuits idC (reverseCircuit $ Df.map f)
-  |> toDfCircuit dfB
-
 -- | Like 'P.map'
 map ::
   ( DfConv dfA
@@ -605,22 +588,6 @@ map ::
 map dfA dfB f
   =  fromDfCircuit dfA
   |> tupCircuits (Df.map f) idC
-  |> toDfCircuit dfB
-
--- | Like 'P.map', but TODO
-mapBoth ::
-  ( DfConv dfA
-  , DfConv dfB
-  , Dom dfA ~ Dom dfB
-  , HiddenClockResetEnable (Dom dfA) ) =>
-  Proxy dfA ->
-  Proxy dfB ->
-  (FwdPayload dfA -> FwdPayload dfB) ->
-  (BwdPayload dfB -> BwdPayload dfA) ->
-  Circuit dfA dfB
-mapBoth dfA dfB f g
-  =  fromDfCircuit dfA
-  |> tupCircuits (Df.map f) (reverseCircuit $ Df.map g)
   |> toDfCircuit dfB
 
 -- | Like 'P.fst'
@@ -1248,32 +1215,6 @@ fifo dfA dfB fifoDepth
   =  fromDfCircuit dfA
   |> tupCircuits (Df.fifo fifoDepth) idC
   |> toDfCircuit dfB where
-
--- TODO comment
-interconnect ::
-  ( DfConv dfA
-  , DfConv dfB
-  , BwdPayload dfA ~ BwdPayload dfB
-  , FwdPayload dfA ~ FwdPayload dfB
-  , Dom dfA ~ Dom dfB
-  , HiddenClockResetEnable (Dom dfA)
-  , KnownNat numA
-  , KnownNat numB
-  , Fwd dfA ~ Signal (Dom dfA) fwdA ) =>
-  Proxy dfA ->
-  Proxy dfB ->
-  (fwdA -> Maybe (Index numB)) ->
-  Circuit (Vec numA dfA) (Vec numB dfB)
-interconnect dfA dfB routeReqFn = Circuit circuitFn where
-  circuitFn (inpA, inpB) = toSignals (innerCircuit $ fmap routeReqFn <$> bundle inpA) (inpA, inpB)
-  innerCircuit routeReqs
-    =  vecFromDfConv dfA
-    |> tupCircuits
-    (  interconnectFwd (Ack False) NoData routeReqs )
-    (  undoDoubleRev $ reverseCircuit $ interconnectBwd (Ack False) NoData routeReqs )
-    |> vecToDfConv dfB
-  undoDoubleRev :: Circuit (Reverse (Vec x (Reverse a))) (Reverse (Vec y (Reverse b))) -> Circuit (Vec x a) (Vec y b)
-  undoDoubleRev = coerceCircuit
 
 -- | Emit values given in list. Emits no data while reset is asserted. Not
 -- synthesizable.
