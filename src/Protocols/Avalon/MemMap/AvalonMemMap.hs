@@ -2,6 +2,8 @@
 Types and instance declarations for the Avalon memory mapped protocol
 (http://www1.cs.columbia.edu/~sedwards/classes/2009/4840/mnl_avalon_spec.pdf).
 Non-required fields can be easily toggled by the user.
+TODO update this comment
+TODO the only todos left in this file are for comments
 The @data@ and @outputenable@ fields are not supported since we would need bidirectional data ports.
 The @resetrequest@ field is also not supported since this does not get transferred around,
 but rather gets send "outwards" to whoever is controlling the reset signal of the circuit.
@@ -19,6 +21,8 @@ module Protocols.Avalon.MemMap.AvalonMemMap
   ( AvalonMMSharedConfig(..)
   , AvalonMMSubordinateConfig(..)
   , AvalonMMManagerConfig(..)
+
+  -- TODO comments here
 
   , DataWidth
   , KeepReadData
@@ -452,7 +456,7 @@ deriving instance (GoodMMSubordinateConfig config)
                    => Eq (AvalonSubordinateIn config)
 
 
--- TODO
+-- TODO comment
 data AvalonWriteImpt keepAddr config
   = AvalonWriteImpt
   { wi_writeData  :: KeepType (KeepWriteData config) (Unsigned (DataWidth config))
@@ -483,8 +487,7 @@ deriving instance (GoodMMSharedConfig config,
                    KeepTypeClass keepAddr)
                    => Eq (AvalonWriteImpt keepAddr config)
 
--- TODO
--- data AvalonReadReqImpt (KeepAddr config) (SShared config)
+-- TODO comment
 data AvalonReadReqImpt keepAddr config
   = AvalonReadReqImpt
   { rri_addr       :: KeepType keepAddr (Unsigned (AddrWidth config))
@@ -611,7 +614,6 @@ subordinateOutRemoveNonDf AvalonSubordinateOut{..}
   , so_irq = keepTypeFalse
   }, (so_readyForData, so_dataAvailable, so_irq))
 
--- TODO take out begintransfer and beginbursttransfer
 subordinateInAddNonDf ::
   GoodMMSubordinateConfig cfg =>
   ( KeepType (KeepBeginBurstTransfer cfg) Bool
@@ -653,7 +655,7 @@ boolToMMSubordinateAck ack
     , so_readData      = errorX "No readData for boolToAck"
     }
 
--- TODO
+-- TODO comment here and below also rename this
 mmSubordinateReadDat :: (GoodMMSubordinateConfig config) => AvalonReadImpt (SShared config) -> AvalonSubordinateOut config
 mmSubordinateReadDat dat
   = AvalonSubordinateOut
@@ -666,6 +668,7 @@ mmSubordinateReadDat dat
     , so_readData      = ri_readData dat
     }
 
+-- TODO comment, mention that it needs to have 0 fixed wait time
 mmSubordinateOutToReadImpt :: (GoodMMSubordinateConfig config) => AvalonSubordinateOut config -> Maybe (AvalonReadImpt (SShared config))
 mmSubordinateOutToReadImpt (AvalonSubordinateOut{..})
   = if cond then Just AvalonReadImpt
@@ -682,7 +685,7 @@ mmManagerInToReadImpt (AvalonManagerIn{..})
   , ri_readData    = mi_readData
   } else Nothing
   where
-  cond = not mi_waitRequest && fromKeepTypeDef True mi_readDataValid -- TODO anything else? YES I THINK SO........
+  cond = fromKeepTypeDef True mi_readDataValid
 
 mmSubordinateInToWriteImpt :: (GoodMMSubordinateConfig config) => AvalonSubordinateIn config -> Maybe (AvalonWriteImpt (KeepAddr config) (SShared config))
 mmSubordinateInToWriteImpt (AvalonSubordinateIn{..})
@@ -746,7 +749,7 @@ mmWriteImptToSubordinateIn (AvalonWriteImpt{..})
   , si_write              = toKeepType True
   , si_byteEnable         = wi_byteEnable
   , si_writeByteEnable    = toKeepType $ bitCoerce $ repeat True
-  , si_beginTransfer      = toKeepType False -- TODO??
+  , si_beginTransfer      = toKeepType False -- TODO?? I'll prob require that it's a dfconv config
   , si_burstCount         = wi_burstCount
   , si_beginBurstTransfer = toKeepType False -- TODO??
   , si_writeData          = wi_writeData
@@ -762,7 +765,7 @@ mmReadReqImptToSubordinateIn (AvalonReadReqImpt{..})
   , si_write              = toKeepType False
   , si_byteEnable         = rri_byteEnable
   , si_writeByteEnable    = toKeepType 0
-  , si_beginTransfer      = toKeepType False -- TODO??
+  , si_beginTransfer      = toKeepType False -- TODO?? dfconv config
   , si_burstCount         = rri_burstCount
   , si_beginBurstTransfer = toKeepType False -- TODO??
   , si_writeData          = errorX "No writeData for read req"
@@ -808,7 +811,7 @@ boolToMMManagerAck ack
   , mi_readData      = errorX "No readData for boolToAck"
   }
 
--- An @AvalonManagerIn@ TODO
+-- An @AvalonManagerIn@ TODO comment
 mmManagerReadDat :: (GoodMMManagerConfig config) => AvalonReadImpt (MShared config) -> AvalonManagerIn config
 mmManagerReadDat dat
   = AvalonManagerIn
@@ -859,8 +862,6 @@ mmSubordinateOutToBool so = fromKeepTypeDef True (so_readyForData so) && not (fr
 mmManagerInToBool :: (GoodMMManagerConfig config) => AvalonManagerIn config -> Bool
 mmManagerInToBool = not . mi_waitRequest
 
--- TODO support fixed wait time in instances below
-
 -- Datatype for the manager end of the Avalon memory-mapped protocol.
 data AvalonMMManager (dom :: Domain) (config :: AvalonMMManagerConfig) = AvalonMMManager
 
@@ -881,9 +882,8 @@ instance (GoodMMSubordinateConfig config, KeepWaitRequest config ~ 'True) => Bac
 instance (GoodMMManagerConfig config) => Backpressure (AvalonMMManager dom config) where
   boolsToBwd _ = C.fromList_lazy . fmap boolToMMManagerAck
 
--- TODO keep waitrequest on when not receiving data?
-
 -- TODO comment that this is a copypaste of the master one
+-- TODO also comment that burstcount is forced to 1, and the reason why that is
 instance (GoodMMSubordinateConfig config, config ~ RemoveNonDfSubordinate config) =>
   DfConv.DfConv   (AvalonMMSubordinate dom 0 config) where
   type Dom        (AvalonMMSubordinate dom 0 config) = dom
@@ -891,11 +891,11 @@ instance (GoodMMSubordinateConfig config, config ~ RemoveNonDfSubordinate config
   type FwdPayload (AvalonMMSubordinate dom 0 config) = Either (AvalonReadReqImpt (KeepAddr config) (SShared config)) (AvalonWriteImpt (KeepAddr config) (SShared config))
 
   toDfCircuit proxy = DfConv.toDfCircuitHelper proxy s0 blankOtp stateFn where
-    s0 = (Nothing, False)
+    s0 = (Nothing, False) -- TODO comment
     blankOtp = mmSubordinateInNoData
     stateFn so dfAck dfDat = do
       (readDatStored, readReqAcked) <- get
-      let readDatIn = mmSubordinateOutToReadImpt so -- TODO this fn should not look at waitrequest, only at readdatavalid
+      let readDatIn = mmSubordinateOutToReadImpt so
       let miBool = mmSubordinateOutToBool so
       let (readDatStored', readReqAcked', si, dfAckOut)
             = case (dfDat, readDatStored) of
@@ -925,7 +925,7 @@ instance (GoodMMSubordinateConfig config, config ~ RemoveNonDfSubordinate config
       pure (si, readDatStored', dfAckOut)
 
   fromDfCircuit proxy = DfConv.fromDfCircuitHelper proxy s0 blankOtp stateFn where
-    s0 = False
+    s0 = False -- TODO comment
     blankOtp = boolToMMSubordinateAck False
     stateFn si dfAck dfDat = do
       dfAckSt <- get
@@ -945,7 +945,7 @@ instance (GoodMMSubordinateConfig config, config ~ RemoveNonDfSubordinate config
       put dfAckSt'
       pure (so, dfDatOut, dfAckOut)
 
--- TODO comment abt burstcount forced to be 1
+-- TODO comment all the stuff mentioned in the other dflike
 instance (GoodMMManagerConfig config, config ~ RemoveNonDfManager config) =>
   DfConv.DfConv   (AvalonMMManager dom config) where
   type Dom        (AvalonMMManager dom config) = dom
@@ -954,11 +954,11 @@ instance (GoodMMManagerConfig config, config ~ RemoveNonDfManager config) =>
 
   toDfCircuit proxy = DfConv.toDfCircuitHelper proxy s0 blankOtp stateFn where
     s0 = (Nothing, False) -- reads only get sent for one clock cycle, so we have to store it until it's acked
-    -- TODO added "already waitrequest=false'd our read request" to state; don't ack df but stop sending forward mmReadReqImptToManagerOut, comment abt it
+    -- TODO comment: added "already waitrequest=false'd our read request" to state; don't ack df but stop sending forward mmReadReqImptToManagerOut
     blankOtp = mmManagerOutNoData
     stateFn mi dfAck dfDat = do
       (readDatStored, readReqAcked) <- get
-      let readDatIn = mmManagerInToReadImpt mi -- TODO this fn should not look at waitrequest, only at readdatavalid
+      let readDatIn = mmManagerInToReadImpt mi
       let miBool = mmManagerInToBool mi
       let (readDatStored', readReqAcked', mo, dfAckOut)
             = case (dfDat, readDatStored) of
@@ -1042,9 +1042,4 @@ instance (GoodMMSubordinateConfig config, KnownDomain dom, config ~ RemoveNonDfS
 -- This is because they have both write data sent one way and read data sent the other. By writing a 'Drivable' instance (meant for protocols
 -- with unidirectional data), we would have to ignore one or the other.
 --
--- Tests can still be made for Avalon MM circuits, by attaching 'DfConv.dfToDfConvInp' and/or 'DfConv.dfToDfConvOtp' on both ends of the circuit.
--- Then you will end up with unidirectional data on both sides, choosing yourself whether to ignore either the read data or the write data.
---
--- TODO it would be nice to drive a constant value in the other direction, can we change dfToDfConvInp or make a circuit that drives the read line
--- with a constant?
--- Also can we make an @instance DfConv (Df dom a, Reverse (Df dom b))@? This should be the canonical 'DfConv' instance but we never wrote it.
+-- Tests can still be made for Avalon MM circuits, using 'DfConv.dfConvTestBench'. See 'Tests.Protocols.AvalonMemMap' for examples.

@@ -1,7 +1,6 @@
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE NumericUnderscores #-}
 {-# LANGUAGE RecordWildCards #-}
-{-# LANGUAGE PartialTypeSignatures #-} -- TODO remove
 
 module Tests.Protocols.AvalonMemMap where
 
