@@ -776,6 +776,14 @@ fromKeepTypeDef deflt val = fromMaybe deflt (fromKeepType val)
 convKeepType :: (KeepTypeClass a, KeepTypeClass b) => t -> KeepType a t -> KeepType b t
 convKeepType b = toKeepType . fromKeepTypeDef b
 
+-- TODO comment
+keepTypeFalse :: KeepType 'False t
+keepTypeFalse = Proxy
+
+-- TODO comment
+fromKeepTypeTrue :: KeepType 'True t -> t
+fromKeepTypeTrue = runIdentity
+
 -- | Protocol to reverse a circuit.
 -- 'Fwd' becomes 'Bwd' and vice versa.
 -- No changes are made otherwise.
