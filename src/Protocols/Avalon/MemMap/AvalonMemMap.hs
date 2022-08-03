@@ -987,36 +987,21 @@ instance (GoodMMManagerConfig config, config ~ RemoveNonDfManager config) =>
     blankOtp = boolToMMManagerAck False
     stateFn mo dfAck dfDat = do
       dfAckSt <- get -- s (|| dfAck)
-      let (toPut, toRetA, toRetB, _)
-            = case ( mmManagerOutToWriteImpt mo {- write data -}
-                   , mmManagerOutToReadReqImpt mo {- read request coming in -}
-                   , dfAckSt {- df acknowledged read request -}
-                   , dfDat {- df sending read data -}
-                   ) of
-            (Just wi, _, _, _) -> (False, boolToMMManagerAck dfAck, Just (Right wi), False) -- never makes it here
-            (Nothing, Just _, True, Just rdat) -> (False, mmManagerReadDat rdat, Nothing, True) -- makes it here; in retval: (a,b,NOT c) make it
-            (Nothing, Just ri, _, _) -> ((dfAckSt || dfAck), boolToMMManagerAck False, if dfAckSt then Nothing else Just (Left ri), False) -- makes it here
-            (Nothing, Nothing, _, _) -> (False, boolToMMManagerAck False, Nothing, False) -- makes it here
-      let toRetB
-            = case ( mmManagerOutToWriteImpt mo {- write data -}
-                   , mmManagerOutToReadReqImpt mo {- read request coming in -}
-                   , dfAckSt {- df acknowledged read request -}
-                   , dfDat {- df sending read data -}
-                   ) of
-            (Just wi, _, _, _) -> Just (Right wi)
-            (Nothing, Just ri, _, _) -> if dfAckSt then Nothing else Just (Left ri)
-            (Nothing, Nothing, _, _) -> Nothing
-      let toRetC
-            = case ( mmManagerOutToWriteImpt mo {- write data -}
-                   , mmManagerOutToReadReqImpt mo {- read request coming in -}
-                   , dfAckSt {- df acknowledged read request -}
-                   , dfDat {- df sending read data -}
-                   ) of
-            (Nothing, Just _, True, Just rdat) -> True
-            _ -> False
-      put toPut
-      pure (toRetA, toRetB, toRetC) -- makes it here
-  -- depend on mo and dfDat
+      let writeImpt = mmManagerOutToWriteImpt mo
+      let readReqImpt = if Maybe.isNothing writeImpt then mmManagerOutToReadReqImpt mo else Nothing
+      let sendingReadDat = if (Maybe.isJust readReqImpt) && dfAckSt then dfDat else Nothing
+      let dfAckSt' = Maybe.isJust readReqImpt && (dfAckSt || dfAck)
+      let mi = case (writeImpt, sendingReadDat) of
+                 (Just _, _) -> boolToMMManagerAck dfAck
+                 (_, Just rdat) -> mmManagerReadDat rdat
+                 _ -> boolToMMManagerAck False
+      let dfDatOut = case (writeImpt, readReqImpt, dfAckSt) of
+                       (Just wi, _, _) -> Just (Right wi)
+                       (_, Just ri, False) -> Just (Left ri)
+                       _ -> Nothing
+      let dfAckOut = Maybe.isJust sendingReadDat
+      put dfAckSt'
+      pure (mi, dfDatOut, dfAckOut)
 
 instance (GoodMMManagerConfig config, KnownDomain dom, config ~ RemoveNonDfManager config) =>
   Simulate (AvalonMMManager dom config) where

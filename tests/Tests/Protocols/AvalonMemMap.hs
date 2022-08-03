@@ -78,7 +78,7 @@ prop_avalon_idc_id_manager :: Property
 prop_avalon_idc_id_manager =
   DfTest.idWithModelDf
     defExpectOptions
-    (DfTest.genData $ (Left <$> genReadReqImpt) ) --  C.<|> (Right <$> genWriteImpt))
+    (DfTest.genData $ (Left <$> genReadReqImpt) C.<|> (Right <$> genWriteImpt))
     id
     (C.withClockResetEnable @C.System C.clockGen C.resetGen C.enableGen $ DfConv.dfConvTestBench Proxy Proxy (repeat True) (repeat (Df.Data readImpt)) ckt)
  where
