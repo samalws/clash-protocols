@@ -7,16 +7,9 @@ module Tests.Protocols.AvalonMemMap where
 
 -- base
 import Prelude
-import Data.Maybe (fromMaybe)
 
 -- clash-prelude
 import qualified Clash.Prelude as C
-
--- list
-import Data.List (partition, transpose, mapAccumL)
-
--- containers
-import qualified Data.HashMap.Strict as HashMap
 
 -- extra
 import Data.Proxy (Proxy(..))
@@ -24,7 +17,6 @@ import Data.Proxy (Proxy(..))
 -- hedgehog
 import Hedgehog
 import qualified Hedgehog.Gen as Gen
-import qualified Hedgehog.Range as Range
 
 -- tasty
 import Test.Tasty
@@ -41,7 +33,6 @@ import qualified Protocols.DfConv as DfConv
 import Protocols.Avalon.MemMap.AvalonMemMap
 
 -- tests
-import Util
 import qualified Tests.Protocols.Df as DfTest
 
 ---------------------------------------------------------------

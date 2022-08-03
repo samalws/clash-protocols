@@ -65,9 +65,6 @@ module Protocols.Avalon.MemMap.AvalonMemMap
   , AvalonWriteImpt(..)
   , AvalonReadReqImpt(..)
   , AvalonReadImpt(..)
-  , AvalonWriteImpt(..)
-  , AvalonReadReqImpt(..)
-  , AvalonReadImpt(..)
 
   , managerOutAddNonDf
   , managerOutRemoveNonDf
@@ -86,8 +83,7 @@ module Protocols.Avalon.MemMap.AvalonMemMap
 -- base
 import Prelude ()
 
-import           Control.Arrow ((***))
-import           Control.Monad.State (put, gets, get)
+import           Control.Monad.State (put, get)
 import           Control.DeepSeq (NFData)
 import qualified Data.Maybe as Maybe
 import           Data.Proxy
@@ -810,18 +806,6 @@ boolToMMManagerAck ack
   , mi_irqList       = toKeepType 0
   , mi_irqNumber     = toKeepType Nothing
   , mi_readData      = errorX "No readData for boolToAck"
-  }
-
--- An @AvalonManagerIn@ containing no read data, but not giving a wait request or an IRQ.
-mmManagerInNoData :: (GoodMMManagerConfig config) => AvalonManagerIn config
-mmManagerInNoData
-  = AvalonManagerIn
-  { mi_waitRequest   = False
-  , mi_readDataValid = toKeepType False
-  , mi_endOfPacket   = toKeepType False
-  , mi_irqList       = toKeepType 0
-  , mi_irqNumber     = toKeepType Nothing
-  , mi_readData      = errorX "No read data defined"
   }
 
 -- An @AvalonManagerIn@ TODO
