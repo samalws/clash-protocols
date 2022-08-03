@@ -180,6 +180,7 @@ test-suite unittests
     Tests.Protocols
     Tests.Protocols.Df
     Tests.Protocols.DfConv
+    Tests.Protocols.AvalonMemMap
     Tests.Protocols.Plugin
 
     Util

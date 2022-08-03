@@ -56,19 +56,20 @@ module Protocols.Avalon.MemMap.AvalonMemMap
   , GoodMMSubordinateConfig
   , GoodMMManagerConfig
 
-  , AvalonManagerOut
-  , AvalonManagerIn
-  , AvalonSubordinateOut
-  , AvalonSubordinateIn
+  , AvalonManagerOut(..)
+  , AvalonManagerIn(..)
+  , AvalonSubordinateOut(..)
+  , AvalonSubordinateIn(..)
 
-  , AvalonManagerWriteImpt
-  , AvalonManagerReadReqImpt
-  , AvalonManagerReadImpt
-  , AvalonSubordinateWriteImpt
-  , AvalonSubordinateReadReqImpt
-  , AvalonSubordinateReadImpt
+  , AvalonManagerWriteImpt(..)
+  , AvalonManagerReadReqImpt(..)
+  , AvalonManagerReadImpt(..)
+  , AvalonSubordinateWriteImpt(..)
+  , AvalonSubordinateReadReqImpt(..)
+  , AvalonSubordinateReadImpt(..)
 
   , interconnectFabric
+  , interconnectFabricSingleMember
 
   , managerOutAddNonDf
   , managerOutRemoveNonDf
@@ -87,7 +88,8 @@ module Protocols.Avalon.MemMap.AvalonMemMap
 -- base
 import Prelude ()
 
-import           Control.Monad.State (put, gets)
+import           Control.Arrow ((***))
+import           Control.Monad.State (put, gets, get)
 import           Control.DeepSeq (NFData)
 import qualified Data.Maybe as Maybe
 import           Data.Proxy
@@ -724,6 +726,9 @@ interconnectFabric subordinateAddrFns irqNums fixedWaitTime = Circuit cktFn wher
     , si_writeData          = mo_writeData mo
     }
 
+interconnectFabricSingleMember subordinateAddrFn irqNum fixedWaitTime
+  = Circuit ((head *** head) . toSignals (interconnectFabric (singleton subordinateAddrFn) (singleton irqNum) fixedWaitTime) . (singleton *** singleton))
+
 managerOutAddNonDf ::
   GoodMMManagerConfig cfg =>
   AvalonManagerOut (RemoveNonDfManager cfg) ->
@@ -893,7 +898,7 @@ mmManagerOutToWriteImpt (AvalonManagerOut{..})
   where
   cond =  fromKeepTypeDef True mo_write
        && not (fromKeepTypeDef False mo_read)
-       && 0 /= fromKeepTypeDef 1 mo_byteEnable
+       -- && 0 /= fromKeepTypeDef 1 mo_byteEnable
 
 mmManagerOutToReadReqImpt :: (GoodMMManagerConfig config) => AvalonManagerOut config -> Maybe (AvalonManagerReadReqImpt config)
 mmManagerOutToReadReqImpt (AvalonManagerOut{..})
@@ -906,7 +911,7 @@ mmManagerOutToReadReqImpt (AvalonManagerOut{..})
   where
   cond =  fromKeepTypeDef True mo_read
        && not (fromKeepTypeDef False mo_write)
-       && 0 /= fromKeepTypeDef 1 mo_byteEnable
+       -- && 0 /= fromKeepTypeDef 1 mo_byteEnable
 
 -- TODO comment
 mmWriteImptToSubordinateIn :: (GoodMMSubordinateConfig config) => AvalonSubordinateWriteImpt config -> AvalonSubordinateIn config
@@ -1095,7 +1100,7 @@ instance (GoodMMSubordinateConfig config, config ~ RemoveNonDfSubordinate config
     s0 = False
     blankOtp = boolToMMSubordinateAck False
     stateFn si dfAck dfDat = do
-      dfAckSt <- gets (|| dfAck)
+      dfAckSt <- get -- s (|| dfAck)
       let (toPut, toRet)
             = case ( mmSubordinateInToWriteImpt si {- write data -}
                    , mmSubordinateInToReadReqImpt si {- read request coming in -}
@@ -1119,25 +1124,24 @@ instance (GoodMMManagerConfig config, config ~ RemoveNonDfManager config) =>
     s0 = Nothing
     blankOtp = mmManagerOutNoData
     stateFn mi dfAck dfDat = do
-      readDatStored <- gets (<|> mmManagerInToReadImpt mi)
-      let (toPut, toRetMo, toRetAck)
+      readDatStored <- get -- <|> mmManagerInToReadImpt mi
+      let readDatIn = mmManagerInToReadImpt mi
+      let (toPut, toRetMo)
             = case ( readDatStored
-                   , dfAck
                    , dfDat
                    ) of
-            (Just _, True, _) -> (Nothing, mmManagerOutNoData, False)
-            (Just dat, False, _) -> (Just dat, mmManagerOutNoData, False)
-            (Nothing, _, Just (Right wi)) -> (Nothing, mmWriteImptToManagerOut wi, mmManagerInToBool mi)
-            (Nothing, _, Just (Left ri)) -> (Nothing, mmReadReqImptToManagerOut ri, mmManagerInToBool mi)
-            (Nothing, _, Nothing) -> (Nothing, mmManagerOutNoData, False)
-      put toPut
-      pure (toRetMo, readDatStored, toRetAck)
+            (_, Just (Right wi)) -> (readDatStored, mmWriteImptToManagerOut (wi { mwi_burstCount = toKeepType 1 }))
+            (Just _, _) -> (readDatStored, mmManagerOutNoData)
+            (Nothing, Just (Left ri)) -> (readDatIn, mmReadReqImptToManagerOut (ri { mrri_burstCount = toKeepType 1 }))
+            (Nothing, Nothing) -> (Nothing, mmManagerOutNoData)
+      put $ if dfAck then Nothing else toPut
+      pure (toRetMo, toPut, mmManagerInToBool mi)
 
   fromDfCircuit proxy = DfConv.fromDfCircuitHelper proxy s0 blankOtp stateFn where
     s0 = False
     blankOtp = boolToMMManagerAck False
     stateFn mo dfAck dfDat = do
-      dfAckSt <- gets (|| dfAck)
+      dfAckSt <- get -- s (|| dfAck)
       let (toPut, toRet)
             = case ( mmManagerOutToWriteImpt mo {- write data -}
                    , mmManagerOutToReadReqImpt mo {- read request coming in -}

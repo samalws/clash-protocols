@@ -37,7 +37,7 @@ module Protocols.DfConv
     -- * Df functions generalized to Dflike
   , convert
   , const, void, pure
-  , map, bimap
+  , map, mapBoth, bimap
   , fst, snd
   , mapMaybe, catMaybes
   , filter
@@ -67,6 +67,8 @@ module Protocols.DfConv
   , sample
   , stall
   , simulate
+  , dfConvTestBench
+  , dfConvTestBenchRev
   ) where
 
 
@@ -588,6 +590,22 @@ map ::
 map dfA dfB f
   =  fromDfCircuit dfA
   |> tupCircuits (Df.map f) idC
+  |> toDfCircuit dfB
+
+-- | TODO
+mapBoth ::
+  ( DfConv dfA
+  , DfConv dfB
+  , Dom dfA ~ Dom dfB
+  , HiddenClockResetEnable (Dom dfA) ) =>
+  Proxy dfA ->
+  Proxy dfB ->
+  (FwdPayload dfA -> FwdPayload dfB) ->
+  (BwdPayload dfB -> BwdPayload dfA) ->
+  Circuit dfA dfB
+mapBoth dfA dfB f g
+  =  fromDfCircuit dfA
+  |> tupCircuits (Df.map f) (reverseCircuit $ Df.map g)
   |> toDfCircuit dfB
 
 -- | Like 'P.fst'
@@ -1299,3 +1317,71 @@ simulate dfA dfB conf circ inputs = Df.simulate conf circ' inputs where
     =  withClockResetEnable clk rst en (dfToDfConvOtp dfA)
     |> circ clk rst en
     |> withClockResetEnable clk rst en (dfToDfConvInp dfB)
+
+-- TODO comment
+dfConvTestBench ::
+  ( DfConv dfA
+  , DfConv dfB
+  , NFDataX (BwdPayload dfB)
+  , ShowX (BwdPayload dfB)
+  , Show (BwdPayload dfB)
+  , Dom dfA ~ Dom dfB
+  , HiddenClockResetEnable (Dom dfA) ) =>
+  Proxy dfA ->
+  Proxy dfB ->
+  [Bool] ->
+  [Data (BwdPayload dfB)] ->
+  Circuit dfA dfB ->
+  Circuit
+    (Df (Dom dfA) (FwdPayload dfA))
+    (Df (Dom dfB) (FwdPayload dfB))
+dfConvTestBench dfA dfB bwdAcks bwdPayload circ
+  =  mapCircuit (, ()) P.fst P.fst (, ())
+  $  tupCircuits idC (ackCircuit dfA)
+  |> toDfCircuit dfA
+  |> circ
+  |> fromDfCircuit dfB
+  |> tupCircuits idC driveCircuit
+ where
+  ackCircuit :: Proxy dfA -> Circuit (Reverse ()) (Reverse (Df (Dom dfA) (BwdPayload dfA)))
+  ackCircuit _
+    = reverseCircuit
+    $ Circuit
+    $ P.const
+    ( boolsToBwd (Proxy @(Df _ _)) bwdAcks
+    , () )
+  driveCircuit = reverseCircuit (driveC def bwdPayload)
+
+-- TODO comment
+dfConvTestBenchRev ::
+  ( DfConv dfA
+  , DfConv dfB
+  , NFDataX (FwdPayload dfA)
+  , ShowX (FwdPayload dfA)
+  , Show (FwdPayload dfA)
+  , Dom dfA ~ Dom dfB
+  , HiddenClockResetEnable (Dom dfA) ) =>
+  Proxy dfA ->
+  Proxy dfB ->
+  [Data (FwdPayload dfA)] ->
+  [Bool] ->
+  Circuit dfA dfB ->
+  Circuit
+    (Df (Dom dfB) (BwdPayload dfB))
+    (Df (Dom dfA) (BwdPayload dfA))
+dfConvTestBenchRev dfA dfB fwdPayload fwdAcks circ
+  =  mapCircuit ((), ) P.snd P.snd ((), )
+  $  reverseCircuit
+  $  tupCircuits driveCircuit idC
+  |> toDfCircuit dfA
+  |> circ
+  |> fromDfCircuit dfB
+  |> tupCircuits (ackCircuit dfB) idC
+ where
+  driveCircuit = driveC def fwdPayload
+  ackCircuit :: Proxy dfB -> Circuit (Df (Dom dfB) (FwdPayload dfB)) ()
+  ackCircuit _
+    = Circuit
+    $ P.const
+    ( boolsToBwd (Proxy @(Df _ _)) fwdAcks
+    , () )
