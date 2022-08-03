@@ -59,7 +59,6 @@ genManagerWriteImpt =
     <*> Gen.enumBounded
     <*> (toKeepType <$> Gen.enumBounded)
     <*> pure (toKeepType 1)
-    <*> (toKeepType <$> Gen.enumBounded)
 
 genManagerReadReqImpt :: Gen (AvalonManagerReadReqImpt ManagerConfig)
 genManagerReadReqImpt =
@@ -67,7 +66,6 @@ genManagerReadReqImpt =
     <$> Gen.enumBounded
     <*> (toKeepType <$> Gen.enumBounded)
     <*> pure (toKeepType 1)
-    <*> (toKeepType <$> Gen.enumBounded)
 
 convWriteImpt (Right AvalonManagerWriteImpt{..})
   = Right AvalonSubordinateWriteImpt

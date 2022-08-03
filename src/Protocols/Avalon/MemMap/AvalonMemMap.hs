@@ -61,7 +61,7 @@ module Protocols.Avalon.MemMap.AvalonMemMap
   , AvalonSubordinateOut(..)
   , AvalonSubordinateIn(..)
 
-  -- TODO aside from flush I think all the impts are identical for M and S
+  -- TODO i think impts are identical for M and S
   , AvalonManagerWriteImpt(..)
   , AvalonManagerReadReqImpt(..)
   , AvalonManagerReadImpt(..)
@@ -253,7 +253,7 @@ type family RemoveNonDfSubordinate (cfg :: AvalonMMSubordinateConfig) where
 type family RemoveNonDfManager (cfg :: AvalonMMManagerConfig) where
   RemoveNonDfManager cfg
     = 'AvalonMMManagerConfig
-      (KeepFlush cfg)
+      (KeepFlush cfg) -- TODO make this false also
       'False
       'False
       (MShared cfg)
@@ -410,7 +410,6 @@ data AvalonManagerWriteImpt config
   , mwi_addr        :: Unsigned (AddrWidth      (MShared config))
   , mwi_byteEnable  :: KeepType (KeepByteEnable (MShared config)) (Unsigned (ByteEnableWidth (MShared config)))
   , mwi_burstCount  :: KeepType (KeepBurstCount (MShared config)) (Unsigned (BurstCountWidth (MShared config)))
-  , mwi_flush       :: KeepType (KeepFlush               config) Bool
   }
   deriving (Generic, Bundle)
 
@@ -432,7 +431,6 @@ data AvalonManagerReadReqImpt config
   { mrri_addr        :: Unsigned (AddrWidth      (MShared config))
   , mrri_byteEnable  :: KeepType (KeepByteEnable (MShared config)) (Unsigned (ByteEnableWidth (MShared config)))
   , mrri_burstCount  :: KeepType (KeepBurstCount (MShared config)) (Unsigned (BurstCountWidth (MShared config)))
-  , mrri_flush       :: KeepType (KeepFlush               config) Bool
   }
   deriving (Generic, Bundle)
 
@@ -587,7 +585,6 @@ deriving instance (GoodMMSubordinateConfig config)
 
 -- TODO remove some constraints
 -- TOOD remove the forall
--- TOOD single member
 interconnectFabric ::
   forall dom managerConfig subordinateConfig numManager numSubordinate decNumSub fixedWaitTime.
   ( GoodMMManagerConfig managerConfig
@@ -670,11 +667,13 @@ interconnectFabric subordinateAddrFns irqNums fixedWaitTime = Circuit cktFn wher
   modifySt (Just mo) so st = modifySt' mo so (Maybe.fromMaybe (0 :: Unsigned 8,
                                                                fromKeepTypeDef 1 (mo_burstCount mo),
                                                                _0 fixedWaitTime,
+                                                               False,
                                                                False) st)
-  modifySt' mo so (ctr1, ctr2, ctr3, readyForTransfer) = modifySt'' (optDecCtr so $ optIncCtr1 mo so ctr1,
-                                                                     optDecCtr2 mo so ctr2,
-                                                                     modifyCtr3 mo ctr3,
-                                                                     modifyReadyForTransfer mo so ctr3 readyForTransfer)
+  modifySt' mo so (ctr1, ctr2, ctr3, readyForTransfer, flushed) = modifySt'' so (optDecCtr so $ optIncCtr1 mo so ctr1,
+                                                                                 optDecCtr2 mo so ctr2,
+                                                                                 modifyCtr3 mo ctr3,
+                                                                                 modifyReadyForTransfer mo so ctr3 readyForTransfer,
+                                                                                 flushed || fromKeepTypeDef False (mo_flush mo))
   -- increment ctr1 if we're reading and waitrequest=false
   optIncCtr1 mo so ctr1 = if shouldIncCtr1 mo so then ctr1+1 else ctr1
   shouldIncCtr1 mo so = moIsRead mo && not (fromKeepTypeDef False (so_waitRequest so))
@@ -690,18 +689,20 @@ interconnectFabric subordinateAddrFns irqNums fixedWaitTime = Circuit cktFn wher
     | not (fromKeepTypeDef False (so_waitRequest so)) && ctr3 == 0 = True
     | moIsOn mo = False
     | otherwise = readyForTransfer
-  -- finally, kill the xferSt if all the counters are at 0
-  modifySt'' (0, 0, 0, _) = Nothing
-  modifySt'' st = Just st
+  -- finally, kill the xferSt if all the counters are at 0, or if we're flushing and the subordinate is currently transferring data
+  -- modifySt'' so (ctr1, _, ctr3, _, True) | not (fromKeepTypeDef False (so_waitRequest so)) = Nothing TODO how to check if currently xfering data?
+  modifySt'' _ (0, 0, 0, _, _) = Nothing
+  modifySt'' _ st = Just st
   -- hack to get a "0" value of the right type
   _0 :: (KnownNat n) => SNat n -> Index (n+1)
   _0 _ = 0
 
   -- given subordinate-out message and xferSt, generate manager-in message
+  convSoMi _ (Just (_,_,_,_,True)) = mmManagerInNoData -- if manager flushes, we make it sit and wait for all the transfers to go through
   convSoMi so st
     = AvalonManagerIn
-    { mi_waitRequest   = Maybe.maybe True (\(ctr1,_,ctr3,_) -> ctr1 < maxBound && ctr3 == 0) st && (fromKeepTypeDef False (so_waitRequest so))
-    , mi_readDataValid = convKeepType False (so_readDataValid so)
+    { mi_waitRequest   = Maybe.maybe True (\(ctr1,_,ctr3,_,_) -> ctr1 < maxBound && ctr3 == 0) st && (fromKeepTypeDef False (so_waitRequest so))
+    , mi_readDataValid = convKeepType False (so_readDataValid so) -- TODO uhhhhhhh I think there's more to it than that...
     , mi_endOfPacket   = convKeepType False (so_endOfPacket so)
     , mi_irqList       = errorX "interconnect fabric: this value gets overwritten later"
     , mi_irqNumber     = errorX "interconnect fabric: this value gets overwritten later"
@@ -718,7 +719,7 @@ interconnectFabric subordinateAddrFns irqNums fixedWaitTime = Circuit cktFn wher
     , si_burstCount         = mo_burstCount mo
     , si_chipSelect         = toKeepType True
     , si_byteEnable         = toKeepType $ resize $ fromKeepTypeDef 0 $ mo_byteEnable mo
-    , si_beginTransfer      = toKeepType $ moIsOn mo && (Maybe.maybe True (\(_,_,_,readyForMsg) -> readyForMsg) st)
+    , si_beginTransfer      = toKeepType $ moIsOn mo && (Maybe.maybe True (\(_,_,_,readyForMsg,_) -> readyForMsg) st)
     , si_beginBurstTransfer = toKeepType $ Maybe.isNothing st
     , si_writeData          = mo_writeData mo
     }
@@ -851,7 +852,7 @@ mmManagerInToReadImpt (AvalonManagerIn{..})
   , mri_readData    = mi_readData
   } else Nothing
   where
-  cond = not mi_waitRequest -- TODO anything else?
+  cond = not mi_waitRequest -- TODO anything else? YES I THINK SO........
 
 mmSubordinateInToWriteImpt :: (GoodMMSubordinateConfig config) => AvalonSubordinateIn config -> Maybe (AvalonSubordinateWriteImpt config)
 mmSubordinateInToWriteImpt (AvalonSubordinateIn{..})
@@ -886,7 +887,6 @@ mmManagerOutToWriteImpt (AvalonManagerOut{..})
   { mwi_addr       = mo_addr
   , mwi_byteEnable = mo_byteEnable
   , mwi_burstCount = mo_burstCount
-  , mwi_flush      = mo_flush
   , mwi_writeData  = mo_writeData
   } else Nothing
   where
@@ -900,7 +900,6 @@ mmManagerOutToReadReqImpt (AvalonManagerOut{..})
   { mrri_addr       = mo_addr
   , mrri_byteEnable = mo_byteEnable
   , mrri_burstCount = mo_burstCount
-  , mrri_flush      = mo_flush
   } else Nothing
   where
   cond =  fromKeepTypeDef True mo_read
@@ -948,7 +947,7 @@ mmWriteImptToManagerOut (AvalonManagerWriteImpt{..})
   , mo_write       = toKeepType True
   , mo_byteEnable  = mwi_byteEnable
   , mo_burstCount  = mwi_burstCount
-  , mo_flush       = mwi_flush
+  , mo_flush       = toKeepType False
   , mo_writeData   = mwi_writeData
   }
 
@@ -961,7 +960,7 @@ mmReadReqImptToManagerOut (AvalonManagerReadReqImpt{..})
   , mo_write       = toKeepType False
   , mo_byteEnable  = mrri_byteEnable
   , mo_burstCount  = mrri_burstCount
-  , mo_flush       = mrri_flush
+  , mo_flush       = toKeepType False
   , mo_writeData   = errorX "No writeData for read req"
   }
 
