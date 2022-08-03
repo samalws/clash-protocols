@@ -239,9 +239,9 @@ type family RemoveNonDfSubordinate (cfg :: AvalonMMSubordinateConfig) where
       (KeepAddr cfg)
       (KeepWriteByteEnable cfg)
       (KeepChipSelect cfg)
-      (KeepBeginTransfer cfg) -- 'False -- (KeepBeginTransfer cfg) -- TODO deal with this elsewhere
+      'False
       (KeepWaitRequest cfg)
-      (KeepBeginBurstTransfer cfg) -- 'False -- TODO deal with this elsewhere -- (KeepBeginBurstTransfer cfg) -- TODO this isnt df compatible
+      'False
       'False
       'False
       'False
@@ -250,7 +250,7 @@ type family RemoveNonDfSubordinate (cfg :: AvalonMMSubordinateConfig) where
 type family RemoveNonDfManager (cfg :: AvalonMMManagerConfig) where
   RemoveNonDfManager cfg
     = 'AvalonMMManagerConfig
-      (KeepFlush cfg) -- TODO make this false also
+      'False
       'False
       'False
       (MShared cfg)
@@ -583,15 +583,25 @@ deriving instance (GoodMMSubordinateConfig config)
 
 managerOutAddNonDf ::
   GoodMMManagerConfig cfg =>
+  KeepType (KeepFlush cfg) Bool ->
   AvalonManagerOut (RemoveNonDfManager cfg) ->
   AvalonManagerOut cfg
-managerOutAddNonDf AvalonManagerOut{..} = AvalonManagerOut{..}
+managerOutAddNonDf flush AvalonManagerOut{..}
+  = AvalonManagerOut
+  { mo_addr, mo_read, mo_write, mo_byteEnable, mo_burstCount, mo_writeData
+  , mo_flush = flush
+  }
 
 managerOutRemoveNonDf ::
   GoodMMManagerConfig cfg =>
   AvalonManagerOut cfg ->
-  AvalonManagerOut (RemoveNonDfManager cfg)
-managerOutRemoveNonDf AvalonManagerOut{..} = AvalonManagerOut{..}
+  ( AvalonManagerOut (RemoveNonDfManager cfg)
+  , KeepType (KeepFlush cfg) Bool )
+managerOutRemoveNonDf AvalonManagerOut{..}
+  = (AvalonManagerOut
+  { mo_addr, mo_read, mo_write, mo_byteEnable, mo_burstCount, mo_writeData
+  , mo_flush = Proxy
+  }, mo_flush)
 
 managerInAddNonDf ::
   GoodMMManagerConfig cfg =>
@@ -652,15 +662,29 @@ subordinateOutRemoveNonDf AvalonSubordinateOut{..}
 -- TODO take out begintransfer and beginbursttransfer
 subordinateInAddNonDf ::
   GoodMMSubordinateConfig cfg =>
+  ( KeepType (KeepBeginBurstTransfer cfg) Bool
+  , KeepType (KeepBeginTransfer cfg) Bool ) ->
   AvalonSubordinateIn (RemoveNonDfSubordinate cfg) ->
   AvalonSubordinateIn cfg
-subordinateInAddNonDf AvalonSubordinateIn{..} = AvalonSubordinateIn{..}
+subordinateInAddNonDf (beginBurstTransfer, beginTransfer) AvalonSubordinateIn{..}
+  = AvalonSubordinateIn
+  { si_chipSelect, si_addr, si_read, si_write, si_byteEnable, si_writeByteEnable, si_burstCount, si_writeData
+  , si_beginBurstTransfer = beginBurstTransfer
+  , si_beginTransfer = beginTransfer
+  }
 
 subordinateInRemoveNonDf ::
   GoodMMSubordinateConfig cfg =>
   AvalonSubordinateIn cfg ->
-  AvalonSubordinateIn (RemoveNonDfSubordinate cfg)
-subordinateInRemoveNonDf AvalonSubordinateIn{..} = AvalonSubordinateIn{..}
+  ( AvalonSubordinateIn (RemoveNonDfSubordinate cfg)
+  , ( KeepType (KeepBeginBurstTransfer cfg) Bool
+    , KeepType (KeepBeginTransfer cfg) Bool ) )
+subordinateInRemoveNonDf AvalonSubordinateIn{..}
+  = (AvalonSubordinateIn
+  { si_chipSelect, si_addr, si_read, si_write, si_byteEnable, si_writeByteEnable, si_burstCount, si_writeData
+  , si_beginBurstTransfer = Proxy
+  , si_beginTransfer = Proxy
+  }, (si_beginBurstTransfer, si_beginTransfer))
 
 -- Convert a boolean value to an @AvalonSubordinateOut@ structure.
 -- The structure gives no read data, no IRQ, etc.
