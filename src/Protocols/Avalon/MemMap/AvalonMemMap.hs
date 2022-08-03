@@ -950,37 +950,38 @@ instance (GoodMMManagerConfig config, config ~ RemoveNonDfManager config) =>
 
   toDfCircuit proxy = DfConv.toDfCircuitHelper proxy s0 blankOtp stateFn where
     s0 = (Nothing, False) -- reads only get sent for one clock cycle, so we have to store it until it's acked
-    -- TODO add "already waitrequest=false'd our read request" to state; don't ack df but stop sending forward mmReadReqImptToManagerOut
+    -- TODO added "already waitrequest=false'd our read request" to state; don't ack df but stop sending forward mmReadReqImptToManagerOut, comment abt it
     blankOtp = mmManagerOutNoData
     stateFn mi dfAck dfDat = do
       (readDatStored, readReqAcked) <- get
       let readDatIn = mmManagerInToReadImpt mi -- TODO this fn should not look at waitrequest, only at readdatavalid
       let miBool = mmManagerInToBool mi
-      let (toPutA, toPutB, toRetMo, dfAckOut)
-            = case ( readDatStored
-                   , dfDat
-                   ) of
-            (_, Just (Right wi)) -> (readDatStored, False, mmWriteImptToManagerOut (wi { wi_burstCount = toKeepType 1 }), miBool) -- never makes it here
-            (Just _, _) -> (readDatStored, False, mmManagerOutNoData, miBool) -- never makes it here
-            (Nothing, Just (Left ri)) -> (readDatIn, miBool, if readReqAcked then mmManagerOutNoData else (mmReadReqImptToManagerOut (ri { rri_burstCount = toKeepType 1 })), miBool) -- makes it here
-            (Nothing, Nothing) -> (Nothing, False, mmManagerOutNoData, False) -- makes it here
-      put (if dfAck then Nothing else toPutA, toPutB)
-      pure (toRetMo, toPutA, dfAckOut) -- makes it here
-{-
-       readDatStored <- get
-       let readDatIn = mmManagerInToReadImpt mi
-       let (toPut, toRetMo)
-             = case ( readDatStored
-                    , dfDat
-                    ) of
-             (_, Just (Right wi)) -> (readDatStored, mmWriteImptToManagerOut (wi { wi_burstCount = toKeepType 1 }))
-             (Just _, _) -> (readDatStored, mmManagerOutNoData)
-             (Nothing, Just (Left ri)) -> (readDatIn, mmReadReqImptToManagerOut (ri { rri_burstCount = toKeepType 1 }))
-             (Nothing, Nothing) -> (Nothing, mmManagerOutNoData)
-       put $ if dfAck then Nothing else toPut
-       pure (toRetMo, toPut, mmManagerInToBool mi)
--}
-  -- otp depends on data, that's it
+      let (readDatStored', readReqAcked', toRetMo, dfAckOut)
+            = case (dfDat, readDatStored) of
+                (Just (Right wi), _) ->
+                  ( readDatStored
+                  , False
+                  , mmWriteImptToManagerOut (wi { wi_burstCount = toKeepType 1 })
+                  , miBool )
+                (_, Just _) ->
+                  ( readDatStored
+                  , False
+                  , mmManagerOutNoData
+                  , miBool )
+                (Just (Left ri), Nothing) ->
+                  ( readDatIn
+                  , miBool
+                  , if readReqAcked
+                      then mmManagerOutNoData
+                      else mmReadReqImptToManagerOut (ri { rri_burstCount = toKeepType 1 })
+                  , miBool )
+                (Nothing, Nothing) ->
+                  ( Nothing
+                  , False
+                  , mmManagerOutNoData
+                  , False )
+      put (if dfAck then Nothing else readDatStored', readReqAcked')
+      pure (toRetMo, readDatStored', dfAckOut)
 
   fromDfCircuit proxy = DfConv.fromDfCircuitHelper proxy s0 blankOtp stateFn where
     s0 = False -- read request might be acked before read is sent back
