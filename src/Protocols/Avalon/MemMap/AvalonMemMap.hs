@@ -701,8 +701,8 @@ interconnectFabric subordinateAddrFns irqNums fixedWaitTime = Circuit cktFn wher
   convSoMi _ (Just (_,_,_,_,True)) = mmManagerInNoData -- if manager flushes, we make it sit and wait for all the transfers to go through
   convSoMi so st
     = AvalonManagerIn
-    { mi_waitRequest   = Maybe.maybe True (\(ctr1,_,ctr3,_,_) -> ctr1 < maxBound && ctr3 == 0) st && (fromKeepTypeDef False (so_waitRequest so))
-    , mi_readDataValid = convKeepType False (so_readDataValid so) -- TODO uhhhhhhh I think there's more to it than that...
+    { mi_waitRequest   = Maybe.maybe True (\(ctr1,_,ctr3,_,_) -> ctr1 < maxBound && ctr3 == 0) st && (fromKeepTypeDef False (so_waitRequest so)) -- TODO during a read transfer, I *think* we can just keep waitrequest on for super long but i dunno
+    , mi_readDataValid = convKeepType False (so_readDataValid so) -- TODO uhhhhhhh I think there's more to it than that... (this field is used for all pipeline and burst interfaces)
     , mi_endOfPacket   = convKeepType False (so_endOfPacket so)
     , mi_irqList       = errorX "interconnect fabric: this value gets overwritten later"
     , mi_irqNumber     = errorX "interconnect fabric: this value gets overwritten later"
@@ -852,7 +852,7 @@ mmManagerInToReadImpt (AvalonManagerIn{..})
   , mri_readData    = mi_readData
   } else Nothing
   where
-  cond = not mi_waitRequest -- TODO anything else? YES I THINK SO........
+  cond = not mi_waitRequest && fromKeepTypeDef True mi_readDataValid -- TODO anything else? YES I THINK SO........
 
 mmSubordinateInToWriteImpt :: (GoodMMSubordinateConfig config) => AvalonSubordinateIn config -> Maybe (AvalonSubordinateWriteImpt config)
 mmSubordinateInToWriteImpt (AvalonSubordinateIn{..})
@@ -1065,6 +1065,7 @@ instance (GoodMMManagerConfig config) => Backpressure (AvalonMMManager dom confi
 
 -- TODO keep waitrequest on when not receiving data?
 
+-- TODO comment that this is a copypaste of the master one
 instance (GoodMMSubordinateConfig config, config ~ RemoveNonDfSubordinate config) =>
   DfConv.DfConv   (AvalonMMSubordinate dom 0 config) where
   type Dom        (AvalonMMSubordinate dom 0 config) = dom
@@ -1114,21 +1115,22 @@ instance (GoodMMManagerConfig config, config ~ RemoveNonDfManager config) =>
   type FwdPayload (AvalonMMManager dom config) = Either (AvalonManagerReadReqImpt config) (AvalonManagerWriteImpt config)
 
   toDfCircuit proxy = DfConv.toDfCircuitHelper proxy s0 blankOtp stateFn where
-    s0 = Nothing -- reads only get sent for one clock cycle, so we have to store it until it's acked
+    s0 = (Nothing, False) -- reads only get sent for one clock cycle, so we have to store it until it's acked
+    -- TODO add "already waitrequest=false'd our read request" to state; don't ack df but stop sending forward mmReadReqImptToManagerOut
     blankOtp = mmManagerOutNoData
     stateFn mi dfAck dfDat = do
-      readDatStored <- get
-      let readDatIn = mmManagerInToReadImpt mi
-      let (toPut, toRetMo)
+      (readDatStored, readReqAcked) <- get
+      let readDatIn = mmManagerInToReadImpt mi -- TODO this fn should not look at waitrequest, only at readdatavalid
+      let (toPutA, toPutB, toRetMo, dfAckOut)
             = case ( readDatStored
                    , dfDat
                    ) of
-            (_, Just (Right wi)) -> (readDatStored, mmWriteImptToManagerOut (wi { mwi_burstCount = toKeepType 1 }))
-            (Just _, _) -> (readDatStored, mmManagerOutNoData)
-            (Nothing, Just (Left ri)) -> (readDatIn, mmReadReqImptToManagerOut (ri { mrri_burstCount = toKeepType 1 }))
-            (Nothing, Nothing) -> (Nothing, mmManagerOutNoData)
-      put $ if dfAck then Nothing else toPut
-      pure (toRetMo, toPut, mmManagerInToBool mi)
+            (_, Just (Right wi)) -> (readDatStored, False, mmWriteImptToManagerOut (wi { mwi_burstCount = toKeepType 1 }), mmManagerInToBool mi)
+            (Just _, _) -> (readDatStored, False, mmManagerOutNoData, False)
+            (Nothing, Just (Left ri)) -> (readDatIn, mmManagerInToBool mi, if readReqAcked then mmManagerOutNoData else (mmReadReqImptToManagerOut (ri { mrri_burstCount = toKeepType 1 })), mmManagerInToBool mi)
+            (Nothing, Nothing) -> (Nothing, False, mmManagerOutNoData, False)
+      put (if dfAck then Nothing else toPutA, toPutB)
+      pure (toRetMo, toPutA, dfAckOut)
 
   fromDfCircuit proxy = DfConv.fromDfCircuitHelper proxy s0 blankOtp stateFn where
     s0 = False -- read request might be acked before read is sent back
