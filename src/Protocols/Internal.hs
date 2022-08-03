@@ -821,4 +821,4 @@ vecCircuits fs = Circuit (\inps -> C.unzip $ f <$> fs <*> uncurry C.zip inps) wh
 -- The 'Circuit's run in parallel.
 tupCircuits :: Circuit a b -> Circuit c d -> Circuit (a,c) (b,d)
 tupCircuits (Circuit f) (Circuit g) = Circuit (reorder . (f *** g) . reorder) where
-  reorder ((a,b),(c,d)) = ((a,c),(b,d))
+  reorder ~(~(a,b),~(c,d)) = ((a,c),(b,d))

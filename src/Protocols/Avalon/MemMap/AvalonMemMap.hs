@@ -759,7 +759,7 @@ mmWriteImptToSubordinateIn (AvalonWriteImpt{..})
 mmReadReqImptToSubordinateIn :: (GoodMMSubordinateConfig config) => AvalonReadReqImpt (KeepAddr config) (SShared config) -> AvalonSubordinateIn config
 mmReadReqImptToSubordinateIn (AvalonReadReqImpt{..})
   = AvalonSubordinateIn
-  { si_chipSelect         = toKeepType False
+  { si_chipSelect         = toKeepType True
   , si_addr               = rri_addr
   , si_read               = toKeepType True
   , si_write              = toKeepType False
@@ -921,7 +921,7 @@ instance (GoodMMSubordinateConfig config, config ~ RemoveNonDfSubordinate config
                   , False
                   , mmSubordinateInNoData
                   , False )
-      put (if dfAck then Nothing else readDatStored', readReqAcked')
+      put (if (Maybe.isNothing readDatStored' {- to avoid looking at dfAck when not needed -} || dfAck) then Nothing else readDatStored', readReqAcked')
       pure (si, readDatStored', dfAckOut)
 
   fromDfCircuit proxy = DfConv.fromDfCircuitHelper proxy s0 blankOtp stateFn where
@@ -984,7 +984,7 @@ instance (GoodMMManagerConfig config, config ~ RemoveNonDfManager config) =>
                   , False
                   , mmManagerOutNoData
                   , False )
-      put (if dfAck then Nothing else readDatStored', readReqAcked')
+      put (if (Maybe.isNothing readDatStored' {- to avoid looking at dfAck when not needed -} || dfAck) then Nothing else readDatStored', readReqAcked')
       pure (mo, readDatStored', dfAckOut)
 
   fromDfCircuit proxy = DfConv.fromDfCircuitHelper proxy s0 blankOtp stateFn where

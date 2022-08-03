@@ -226,8 +226,8 @@ instance DfConv (Df dom a, Reverse (Df dom b)) where
   type Dom        (Df dom a, Reverse (Df dom b)) = dom
   type BwdPayload (Df dom a, Reverse (Df dom b)) = b
   type FwdPayload (Df dom a, Reverse (Df dom b)) = a
-  toDfCircuit _ = Circuit swap
-  fromDfCircuit _ = Circuit swap
+  toDfCircuit _ = idC
+  fromDfCircuit _ = idC
 
 
 -- DfConv instances for Df
