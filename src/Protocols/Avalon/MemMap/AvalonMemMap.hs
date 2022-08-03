@@ -61,6 +61,7 @@ module Protocols.Avalon.MemMap.AvalonMemMap
   , AvalonSubordinateOut(..)
   , AvalonSubordinateIn(..)
 
+  -- TODO aside from flush I think all the impts are identical for M and S
   , AvalonManagerWriteImpt(..)
   , AvalonManagerReadReqImpt(..)
   , AvalonManagerReadImpt(..)
@@ -241,9 +242,9 @@ type family RemoveNonDfSubordinate (cfg :: AvalonMMSubordinateConfig) where
       (KeepAddr cfg)
       (KeepWriteByteEnable cfg)
       (KeepChipSelect cfg)
-      (KeepBeginTransfer cfg)
+      (KeepBeginTransfer cfg) -- 'False -- (KeepBeginTransfer cfg) -- TODO deal with this elsewhere
       (KeepWaitRequest cfg)
-      (KeepBeginBurstTransfer cfg)
+      (KeepBeginBurstTransfer cfg) -- 'False -- TODO deal with this elsewhere -- (KeepBeginBurstTransfer cfg) -- TODO this isnt df compatible
       'False
       'False
       'False
@@ -529,8 +530,6 @@ data AvalonSubordinateWriteImpt config
   , swi_addr               :: KeepType (KeepAddr config) (Unsigned (AddrWidth (SShared config)))
   , swi_byteEnable         :: KeepType (KeepByteEnable         (SShared config)) (Unsigned (ByteEnableWidth        (SShared config)))
   , swi_burstCount         :: KeepType (KeepBurstCount         (SShared config)) (Unsigned (BurstCountWidth        (SShared config)))
-  , swi_beginTransfer      :: KeepType (KeepBeginTransfer               config) Bool
-  , swi_beginBurstTransfer :: KeepType (KeepBeginBurstTransfer          config) Bool
   }
   deriving (Generic, Bundle)
 
@@ -552,8 +551,6 @@ data AvalonSubordinateReadReqImpt config
   { srri_addr               :: KeepType (KeepAddr config) (Unsigned (AddrWidth (SShared config)))
   , srri_byteEnable         :: KeepType (KeepByteEnable         (SShared config)) (Unsigned (ByteEnableWidth        (SShared config)))
   , srri_burstCount         :: KeepType (KeepBurstCount         (SShared config)) (Unsigned (BurstCountWidth        (SShared config)))
-  , srri_beginTransfer      :: KeepType (KeepBeginTransfer               config) Bool
-  , srri_beginBurstTransfer :: KeepType (KeepBeginBurstTransfer          config) Bool
   }
   deriving (Generic, Bundle)
 
@@ -660,7 +657,7 @@ interconnectFabric subordinateAddrFns irqNums fixedWaitTime = Circuit cktFn wher
     ms = flip elemIndex sm . Just <$> iterateI (+ 1) 0
 
   -- mo wants to read or write
-  moIsOn mo = (fromKeepTypeDef True (mo_read mo) || fromKeepTypeDef True (mo_write mo)) && (0 /= fromKeepTypeDef 1 (mo_byteEnable mo))
+  moIsOn mo = (fromKeepTypeDef True (mo_read mo) || fromKeepTypeDef True (mo_write mo)) -- && (0 /= fromKeepTypeDef 1 (mo_byteEnable mo))
   -- mo wants to read
   moIsRead mo = moIsOn mo && fromKeepTypeDef True (mo_read mo) && not (fromKeepTypeDef False (mo_write mo))
   -- mo wants to write
@@ -797,6 +794,7 @@ subordinateOutRemoveNonDf AvalonSubordinateOut{..}
   , so_irq = Proxy
   }, (so_readyForData, so_dataAvailable, so_irq))
 
+-- TODO take out begintransfer and beginbursttransfer
 subordinateInAddNonDf ::
   GoodMMSubordinateConfig cfg =>
   AvalonSubordinateIn (RemoveNonDfSubordinate cfg) ->
@@ -860,26 +858,22 @@ mmSubordinateInToWriteImpt (AvalonSubordinateIn{..})
   = if cond then Just AvalonSubordinateWriteImpt
   { swi_addr               = si_addr
   , swi_byteEnable         = si_byteEnable
-  , swi_beginTransfer      = si_beginTransfer
   , swi_burstCount         = si_burstCount
-  , swi_beginBurstTransfer = si_beginBurstTransfer
   , swi_writeData          = si_writeData
   } else Nothing
   where
   cond =  fromKeepTypeDef True si_chipSelect
        && fromKeepTypeDef True si_write
        && not (fromKeepTypeDef False si_read)
-       && 0 /= fromKeepTypeDef 1 si_byteEnable
-       && 0 /= fromKeepTypeDef 1 si_writeByteEnable
+       -- && 0 /= fromKeepTypeDef 1 si_byteEnable
+       -- && 0 /= fromKeepTypeDef 1 si_writeByteEnable
 
 mmSubordinateInToReadReqImpt :: (GoodMMSubordinateConfig config) => AvalonSubordinateIn config -> Maybe (AvalonSubordinateReadReqImpt config)
 mmSubordinateInToReadReqImpt (AvalonSubordinateIn{..})
   = if cond then Just AvalonSubordinateReadReqImpt
   { srri_addr               = si_addr
   , srri_byteEnable         = si_byteEnable
-  , srri_beginTransfer      = si_beginTransfer
   , srri_burstCount         = si_burstCount
-  , srri_beginBurstTransfer = si_beginBurstTransfer
   } else Nothing
   where
   cond =  fromKeepTypeDef True si_chipSelect
@@ -923,9 +917,9 @@ mmWriteImptToSubordinateIn (AvalonSubordinateWriteImpt{..})
   , si_write              = toKeepType True
   , si_byteEnable         = swi_byteEnable
   , si_writeByteEnable    = toKeepType $ bitCoerce $ repeat True
-  , si_beginTransfer      = swi_beginTransfer
+  , si_beginTransfer      = toKeepType False -- TODO??
   , si_burstCount         = swi_burstCount
-  , si_beginBurstTransfer = swi_beginBurstTransfer
+  , si_beginBurstTransfer = toKeepType False -- TODO??
   , si_writeData          = swi_writeData
   }
 
@@ -939,9 +933,9 @@ mmReadReqImptToSubordinateIn (AvalonSubordinateReadReqImpt{..})
   , si_write              = toKeepType False
   , si_byteEnable         = srri_byteEnable
   , si_writeByteEnable    = toKeepType 0
-  , si_beginTransfer      = srri_beginTransfer
+  , si_beginTransfer      = toKeepType False -- TODO??
   , si_burstCount         = srri_burstCount
-  , si_beginBurstTransfer = srri_beginBurstTransfer
+  , si_beginBurstTransfer = toKeepType False -- TODO??
   , si_writeData          = errorX "No writeData for read req"
   }
 
@@ -1082,19 +1076,18 @@ instance (GoodMMSubordinateConfig config, config ~ RemoveNonDfSubordinate config
     s0 = Nothing
     blankOtp = mmSubordinateInNoData
     stateFn so dfAck dfDat = do
-      readDatStored <- gets (<|> mmSubordinateOutToReadImpt so)
-      let (toPut, toRetSi, toRetAck)
+      readDatStored <- get
+      let readDatIn = mmSubordinateOutToReadImpt so
+      let (toPut, toRetSi)
             = case ( readDatStored
-                   , dfAck
                    , dfDat
                    ) of
-            (Just _, True, _) -> (Nothing, mmSubordinateInNoData, False)
-            (Just dat, False, _) -> (Just dat, mmSubordinateInNoData, False)
-            (Nothing, _, Just (Right wi)) -> (Nothing, mmWriteImptToSubordinateIn wi, mmSubordinateOutToBool so)
-            (Nothing, _, Just (Left ri)) -> (Nothing, mmReadReqImptToSubordinateIn ri, mmSubordinateOutToBool so)
-            (Nothing, _, Nothing) -> (Nothing, mmSubordinateInNoData, False)
-      put toPut
-      pure (toRetSi, readDatStored, toRetAck)
+            (_, Just (Right wi)) -> (readDatStored, mmWriteImptToSubordinateIn (wi { swi_burstCount = toKeepType 1 }))
+            (Just _, _) -> (readDatStored, mmSubordinateInNoData)
+            (Nothing, Just (Left ri)) -> (readDatIn, mmReadReqImptToSubordinateIn (ri { srri_burstCount = toKeepType 1 }))
+            (Nothing, Nothing) -> (Nothing, mmSubordinateInNoData)
+      put $ if dfAck then Nothing else toPut
+      pure (toRetSi, toPut, mmSubordinateOutToBool so)
 
   fromDfCircuit proxy = DfConv.fromDfCircuitHelper proxy s0 blankOtp stateFn where
     s0 = False
@@ -1104,16 +1097,17 @@ instance (GoodMMSubordinateConfig config, config ~ RemoveNonDfSubordinate config
       let (toPut, toRet)
             = case ( mmSubordinateInToWriteImpt si {- write data -}
                    , mmSubordinateInToReadReqImpt si {- read request coming in -}
-                   , dfAckSt || dfAck {- df acknowledged read request -}
+                   , dfAckSt {- df acknowledged read request -}
                    , dfDat {- df sending read data -}
                    ) of
-                (Just wi, _, _, _) -> (False, (boolToMMSubordinateAck dfAck, Just (Right wi), False))
-                (Nothing, Just rri, True, Just rdat) -> (False, (mmSubordinateReadDat rdat, if dfAckSt then Nothing else Just (Left rri), True))
-                (Nothing, Just rri, _, _) -> ((dfAckSt || dfAck), (boolToMMSubordinateAck False, if dfAckSt then Nothing else Just (Left rri), False))
-                (Nothing, Nothing, _, _) -> (False, (boolToMMSubordinateAck False, Nothing, False))
+            (Just wi, _, _, _) -> (False, (boolToMMSubordinateAck dfAck, Just (Right wi), False))
+            (Nothing, Just _, True, Just rdat) -> (False, (mmSubordinateReadDat rdat, Nothing, True))
+            (Nothing, Just ri, _, _) -> ((dfAckSt || dfAck), (boolToMMSubordinateAck False, if dfAckSt then Nothing else Just (Left ri), False))
+            (Nothing, Nothing, _, _) -> (False, (boolToMMSubordinateAck False, Nothing, False))
       put toPut
       pure toRet
 
+-- TODO comment abt burstcount forced to be 1
 instance (GoodMMManagerConfig config, config ~ RemoveNonDfManager config) =>
   DfConv.DfConv   (AvalonMMManager dom config) where
   type Dom        (AvalonMMManager dom config) = dom
@@ -1121,10 +1115,10 @@ instance (GoodMMManagerConfig config, config ~ RemoveNonDfManager config) =>
   type FwdPayload (AvalonMMManager dom config) = Either (AvalonManagerReadReqImpt config) (AvalonManagerWriteImpt config)
 
   toDfCircuit proxy = DfConv.toDfCircuitHelper proxy s0 blankOtp stateFn where
-    s0 = Nothing
+    s0 = Nothing -- reads only get sent for one clock cycle, so we have to store it until it's acked
     blankOtp = mmManagerOutNoData
     stateFn mi dfAck dfDat = do
-      readDatStored <- get -- <|> mmManagerInToReadImpt mi
+      readDatStored <- get
       let readDatIn = mmManagerInToReadImpt mi
       let (toPut, toRetMo)
             = case ( readDatStored
@@ -1138,18 +1132,18 @@ instance (GoodMMManagerConfig config, config ~ RemoveNonDfManager config) =>
       pure (toRetMo, toPut, mmManagerInToBool mi)
 
   fromDfCircuit proxy = DfConv.fromDfCircuitHelper proxy s0 blankOtp stateFn where
-    s0 = False
+    s0 = False -- read request might be acked before read is sent back
     blankOtp = boolToMMManagerAck False
     stateFn mo dfAck dfDat = do
       dfAckSt <- get -- s (|| dfAck)
       let (toPut, toRet)
             = case ( mmManagerOutToWriteImpt mo {- write data -}
                    , mmManagerOutToReadReqImpt mo {- read request coming in -}
-                   , dfAckSt || dfAck {- df acknowledged read request -}
+                   , dfAckSt {- df acknowledged read request -}
                    , dfDat {- df sending read data -}
                    ) of
             (Just wi, _, _, _) -> (False, (boolToMMManagerAck dfAck, Just (Right wi), False))
-            (Nothing, Just ri, True, Just rdat) -> (False, (mmManagerReadDat rdat, if dfAckSt then Nothing else Just (Left ri), True))
+            (Nothing, Just _, True, Just rdat) -> (False, (mmManagerReadDat rdat, Nothing, True))
             (Nothing, Just ri, _, _) -> ((dfAckSt || dfAck), (boolToMMManagerAck False, if dfAckSt then Nothing else Just (Left ri), False))
             (Nothing, Nothing, _, _) -> (False, (boolToMMManagerAck False, Nothing, False))
       put toPut

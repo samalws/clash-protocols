@@ -66,7 +66,7 @@ genManagerReadReqImpt =
   AvalonManagerReadReqImpt
     <$> Gen.enumBounded
     <*> (toKeepType <$> Gen.enumBounded)
-    <*> (toKeepType <$> Gen.enumBounded)
+    <*> pure (toKeepType 1)
     <*> (toKeepType <$> Gen.enumBounded)
 
 convWriteImpt (Right AvalonManagerWriteImpt{..})
@@ -75,8 +75,6 @@ convWriteImpt (Right AvalonManagerWriteImpt{..})
   , swi_addr               = toKeepType mwi_addr
   , swi_byteEnable         = mwi_byteEnable
   , swi_burstCount         = mwi_burstCount
-  , swi_beginTransfer      = toKeepType True
-  , swi_beginBurstTransfer = toKeepType True
   }
 
 managerReadImpt :: AvalonManagerReadImpt ManagerConfig
@@ -86,12 +84,19 @@ managerReadImpt
   , mri_endOfPacket = toKeepType False
   }
 
+subordinateReadImpt :: AvalonSubordinateReadImpt SubordinateConfig
+subordinateReadImpt
+  = AvalonSubordinateReadImpt
+  { sri_readData = toKeepType 0
+  , sri_endOfPacket = toKeepType False
+  }
+
 prop_avalon_idc_id_manager :: Property
 prop_avalon_idc_id_manager =
   DfTest.idWithModelDf
     defExpectOptions
-    -- (DfTest.genData $ (Left <$> genManagerReadReqImpt) C.<|> (Right <$> genManagerWriteImpt))
-    (DfTest.genData $ Left <$> genManagerReadReqImpt)
+    (DfTest.genData $ (Left <$> genManagerReadReqImpt) C.<|> (Right <$> genManagerWriteImpt))
+    -- (DfTest.genData $ Left <$> genManagerReadReqImpt)
     -- (DfTest.genData $ Right <$> genManagerWriteImpt)
     id
     (C.withClockResetEnable @C.System C.clockGen C.resetGen C.enableGen $ DfConv.dfConvTestBench Proxy Proxy (repeat True) (repeat (Df.Data managerReadImpt)) ckt)
@@ -101,6 +106,8 @@ prop_avalon_idc_id_manager =
     (AvalonMMManager dom ManagerConfig)
   ckt = idC
 
+-- TODO also test reverse
+
 prop_avalon_map_manager_subordinate :: Property
 prop_avalon_map_manager_subordinate =
   DfTest.idWithModelDf
@@ -109,25 +116,25 @@ prop_avalon_map_manager_subordinate =
     -- (DfTest.genData $ Left <$> genManagerReadReqImpt)
     (DfTest.genData $ Right <$> genManagerWriteImpt)
     (fmap convWriteImpt)
-    (C.withClockResetEnable @C.System C.clockGen C.resetGen C.enableGen $ DfConv.dfConvTestBench Proxy Proxy (repeat True) (repeat (Df.NoData)) ckt)
+    (C.withClockResetEnable @C.System C.clockGen C.resetGen C.enableGen $ DfConv.dfConvTestBench Proxy Proxy (repeat True) (repeat (Df.Data subordinateReadImpt)) ckt)
  where
   ckt :: (C.HiddenClockResetEnable dom) => Circuit
     (AvalonMMManager dom ManagerConfig)
     (AvalonMMSubordinate dom 0 SubordinateConfig)
   ckt = DfConv.mapBoth Proxy Proxy convWriteImpt undefined
 
--- prop_avalon_1_fabric_id :: Property
--- prop_avalon_1_fabric_id =
---   DfTest.idWithModelDf
---     defExpectOptions
---     (DfTest.genData $ Right <$> genManagerWriteImpt)
---     (fmap convWriteImpt)
---     (C.withClockResetEnable @C.System C.clockGen C.resetGen C.enableGen $ DfConv.dfConvTestBench Proxy Proxy (repeat True) (repeat Df.NoData) ckt)
---  where
---   ckt :: (C.HiddenClockResetEnable dom) => Circuit
---     (AvalonMMManager dom ManagerConfig)
---     (AvalonMMSubordinate dom 0 SubordinateConfig)
---   ckt = interconnectFabricSingleMember (C.const True) 0 (C.SNat @0)
+prop_avalon_1_fabric_id :: Property
+prop_avalon_1_fabric_id =
+  DfTest.idWithModelDf
+    defExpectOptions
+    (DfTest.genData $ Right <$> genManagerWriteImpt)
+    (fmap convWriteImpt)
+    (C.withClockResetEnable @C.System C.clockGen C.resetGen C.enableGen $ DfConv.dfConvTestBench Proxy Proxy (repeat True) (repeat Df.NoData) ckt)
+ where
+  ckt :: (C.HiddenClockResetEnable dom) => Circuit
+    (AvalonMMManager dom ManagerConfig)
+    (AvalonMMSubordinate dom 0 SubordinateConfig)
+  ckt = interconnectFabricSingleMember (C.const True) 0 (C.SNat @0)
 
 
 tests :: TestTree
