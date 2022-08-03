@@ -907,39 +907,59 @@ instance (GoodMMSubordinateConfig config, config ~ RemoveNonDfSubordinate config
   type FwdPayload (AvalonMMSubordinate dom 0 config) = Either (AvalonReadReqImpt (KeepAddr config) (SShared config)) (AvalonWriteImpt (KeepAddr config) (SShared config))
 
   toDfCircuit proxy = DfConv.toDfCircuitHelper proxy s0 blankOtp stateFn where
-    s0 = Nothing
+    s0 = (Nothing, False)
     blankOtp = mmSubordinateInNoData
     stateFn so dfAck dfDat = do
-      readDatStored <- get
-      let readDatIn = mmSubordinateOutToReadImpt so
-      let (toPut, toRetSi)
-            = case ( readDatStored
-                   , dfDat
-                   ) of
-            (_, Just (Right wi)) -> (readDatStored, mmWriteImptToSubordinateIn (wi { wi_burstCount = toKeepType 1 }))
-            (Just _, _) -> (readDatStored, mmSubordinateInNoData)
-            (Nothing, Just (Left ri)) -> (readDatIn, mmReadReqImptToSubordinateIn (ri { rri_burstCount = toKeepType 1 }))
-            (Nothing, Nothing) -> (Nothing, mmSubordinateInNoData)
-      put $ if dfAck then Nothing else toPut
-      pure (toRetSi, toPut, mmSubordinateOutToBool so)
+      (readDatStored, readReqAcked) <- get
+      let readDatIn = mmSubordinateOutToReadImpt so -- TODO this fn should not look at waitrequest, only at readdatavalid
+      let miBool = mmSubordinateOutToBool so
+      let (readDatStored', readReqAcked', si, dfAckOut)
+            = case (dfDat, readDatStored) of
+                (Just (Right wi), _) ->
+                  ( readDatStored
+                  , False
+                  , mmWriteImptToSubordinateIn (wi { wi_burstCount = toKeepType 1 })
+                  , miBool )
+                (_, Just _) ->
+                  ( readDatStored
+                  , False
+                  , mmSubordinateInNoData
+                  , miBool )
+                (Just (Left ri), Nothing) ->
+                  ( readDatIn
+                  , miBool
+                  , if readReqAcked
+                      then mmSubordinateInNoData
+                      else mmReadReqImptToSubordinateIn (ri { rri_burstCount = toKeepType 1 })
+                  , miBool )
+                (Nothing, Nothing) ->
+                  ( Nothing
+                  , False
+                  , mmSubordinateInNoData
+                  , False )
+      put (if dfAck then Nothing else readDatStored', readReqAcked')
+      pure (si, readDatStored', dfAckOut)
 
   fromDfCircuit proxy = DfConv.fromDfCircuitHelper proxy s0 blankOtp stateFn where
     s0 = False
     blankOtp = boolToMMSubordinateAck False
     stateFn si dfAck dfDat = do
-      dfAckSt <- get -- s (|| dfAck)
-      let (toPut, toRet)
-            = case ( mmSubordinateInToWriteImpt si {- write data -}
-                   , mmSubordinateInToReadReqImpt si {- read request coming in -}
-                   , dfAckSt {- df acknowledged read request -}
-                   , dfDat {- df sending read data -}
-                   ) of
-            (Just wi, _, _, _) -> (False, (boolToMMSubordinateAck dfAck, Just (Right wi), False))
-            (Nothing, Just _, True, Just rdat) -> (False, (mmSubordinateReadDat rdat, Nothing, True))
-            (Nothing, Just ri, _, _) -> ((dfAckSt || dfAck), (boolToMMSubordinateAck False, if dfAckSt then Nothing else Just (Left ri), False))
-            (Nothing, Nothing, _, _) -> (False, (boolToMMSubordinateAck False, Nothing, False))
-      put toPut
-      pure toRet
+      dfAckSt <- get
+      let writeImpt = mmSubordinateInToWriteImpt si
+      let readReqImpt = if Maybe.isNothing writeImpt then mmSubordinateInToReadReqImpt si else Nothing
+      let sendingReadDat = if (Maybe.isJust readReqImpt) && dfAckSt then dfDat else Nothing
+      let dfAckSt' = Maybe.isJust readReqImpt && (dfAckSt || dfAck)
+      let so = case (writeImpt, sendingReadDat) of
+                 (Just _, _) -> boolToMMSubordinateAck dfAck
+                 (_, Just rdat) -> mmSubordinateReadDat rdat
+                 _ -> boolToMMSubordinateAck False
+      let dfDatOut = case (writeImpt, readReqImpt, dfAckSt) of
+                       (Just wi, _, _) -> Just (Right wi)
+                       (_, Just ri, False) -> Just (Left ri)
+                       _ -> Nothing
+      let dfAckOut = Maybe.isJust sendingReadDat
+      put dfAckSt'
+      pure (so, dfDatOut, dfAckOut)
 
 -- TODO comment abt burstcount forced to be 1
 instance (GoodMMManagerConfig config, config ~ RemoveNonDfManager config) =>
@@ -956,7 +976,7 @@ instance (GoodMMManagerConfig config, config ~ RemoveNonDfManager config) =>
       (readDatStored, readReqAcked) <- get
       let readDatIn = mmManagerInToReadImpt mi -- TODO this fn should not look at waitrequest, only at readdatavalid
       let miBool = mmManagerInToBool mi
-      let (readDatStored', readReqAcked', toRetMo, dfAckOut)
+      let (readDatStored', readReqAcked', mo, dfAckOut)
             = case (dfDat, readDatStored) of
                 (Just (Right wi), _) ->
                   ( readDatStored
@@ -981,13 +1001,13 @@ instance (GoodMMManagerConfig config, config ~ RemoveNonDfManager config) =>
                   , mmManagerOutNoData
                   , False )
       put (if dfAck then Nothing else readDatStored', readReqAcked')
-      pure (toRetMo, readDatStored', dfAckOut)
+      pure (mo, readDatStored', dfAckOut)
 
   fromDfCircuit proxy = DfConv.fromDfCircuitHelper proxy s0 blankOtp stateFn where
     s0 = False -- read request might be acked before read is sent back
     blankOtp = boolToMMManagerAck False
     stateFn mo dfAck dfDat = do
-      dfAckSt <- get -- s (|| dfAck)
+      dfAckSt <- get
       let writeImpt = mmManagerOutToWriteImpt mo
       let readReqImpt = if Maybe.isNothing writeImpt then mmManagerOutToReadReqImpt mo else Nothing
       let sendingReadDat = if (Maybe.isJust readReqImpt) && dfAckSt then dfDat else Nothing
