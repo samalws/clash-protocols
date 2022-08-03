@@ -121,19 +121,6 @@ prop_avalon_map_manager_subordinate =
     (AvalonMMSubordinate dom 0 SubordinateConfig)
   ckt = DfConv.mapBoth Proxy Proxy convWriteImpt undefined
 
-prop_avalon_1_fabric_id :: Property
-prop_avalon_1_fabric_id =
-  DfTest.idWithModelDf
-    defExpectOptions
-    (DfTest.genData $ Right <$> genManagerWriteImpt)
-    (fmap convWriteImpt)
-    (C.withClockResetEnable @C.System C.clockGen C.resetGen C.enableGen $ DfConv.dfConvTestBench Proxy Proxy (repeat True) (repeat Df.NoData) ckt)
- where
-  ckt :: (C.HiddenClockResetEnable dom) => Circuit
-    (AvalonMMManager dom ManagerConfig)
-    (AvalonMMSubordinate dom 0 SubordinateConfig)
-  ckt = interconnectFabricSingleMember (C.const True) 0 (C.SNat @0)
-
 
 tests :: TestTree
 tests =
