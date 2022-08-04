@@ -2,12 +2,12 @@
 Types and instance declarations for the Avalon memory mapped protocol
 (http://www1.cs.columbia.edu/~sedwards/classes/2009/4840/mnl_avalon_spec.pdf).
 Non-required fields can be easily toggled by the user.
-TODO update this comment
-TODO the only todos left in this file are for comments
 The @data@ and @outputenable@ fields are not supported since we would need bidirectional data ports.
 The @resetrequest@ field is also not supported since this does not get transferred around,
 but rather gets send "outwards" to whoever is controlling the reset signal of the circuit.
 -}
+
+-- TODO 80 character limit
 
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE FlexibleInstances #-}
@@ -18,12 +18,12 @@ but rather gets send "outwards" to whoever is controlling the reset signal of th
 {-# LANGUAGE UndecidableInstances #-}
 
 module Protocols.Avalon.MemMap.AvalonMemMap
-  ( AvalonMMSharedConfig(..)
+  ( -- * Configuration types
+    AvalonMMSharedConfig(..)
   , AvalonMMSubordinateConfig(..)
   , AvalonMMManagerConfig(..)
 
-  -- TODO comments here
-
+    -- * Grab members from AvalonMMSharedConfig at the type level
   , DataWidth
   , KeepReadData
   , KeepWriteData
@@ -37,6 +37,7 @@ module Protocols.Avalon.MemMap.AvalonMemMap
   , KeepReadDataValid
   , KeepEndOfPacket
 
+    -- * Grab members from AvalonMMSubordinateConfig at the type level
   , KeepAddr
   , KeepWriteByteEnable
   , KeepChipSelect
@@ -48,28 +49,33 @@ module Protocols.Avalon.MemMap.AvalonMemMap
   , KeepIrq
   , SShared
 
+    -- * Grab members from AvalonMMManagerConfig at the type level
   , KeepFlush
   , KeepIrqList
   , KeepIrqNumber
   , MShared
 
+    -- * Remove DfConv-incompatible fields from configs
   , RemoveNonDfSubordinate 
   , RemoveNonDfManager 
 
-  , GoodMMSharedConfig
-  , GoodMMSubordinateConfig
-  , GoodMMManagerConfig
+    -- * Constraints on configs
+  , KnownMMSharedConfig
+  , KnownMMSubordinateConfig
+  , KnownMMManagerConfig
 
+    -- * Avalon MM signals
   , AvalonManagerOut(..)
   , AvalonManagerIn(..)
   , AvalonSubordinateOut(..)
   , AvalonSubordinateIn(..)
 
-  -- TODO i think impts are identical for M and S
+    -- * Important parts of signals, used as payload in DfConv
   , AvalonWriteImpt(..)
   , AvalonReadReqImpt(..)
   , AvalonReadImpt(..)
 
+    -- * Helper functions
   , managerOutAddNonDf
   , managerOutRemoveNonDf
   , managerInAddNonDf
@@ -79,9 +85,9 @@ module Protocols.Avalon.MemMap.AvalonMemMap
   , subordinateInAddNonDf
   , subordinateInRemoveNonDf
 
+    -- * Protocols
   , AvalonMMManager(..)
   , AvalonMMSubordinate(..)
-
   ) where
 
 -- base
@@ -101,7 +107,7 @@ import           Protocols.Internal
 import qualified Protocols.DfConv as DfConv
 
 
--- Config needed for both manager and subordinate interfaces.
+-- | Config needed for both manager and subordinate interfaces.
 -- @Bool@ values represent whether to keep a boolean field or not.
 -- @Nat@ values represent the width of a variable-sized numeric field.
 data AvalonMMSharedConfig
@@ -120,7 +126,7 @@ data AvalonMMSharedConfig
   , keepEndOfPacket   :: Bool
   }
 
--- Config specific to Avalon MM subordinate interfaces.
+-- | Config specific to Avalon MM subordinate interfaces.
 -- @Bool@ values represent whether to keep a boolean field or not.
 -- @Nat@ values represent the width of a variable-sized numeric field.
 -- An @AvalonMMSharedConfig@ is also included for the rest of the fields.
@@ -138,7 +144,7 @@ data AvalonMMSubordinateConfig
   , sShared                :: AvalonMMSharedConfig
   }
 
--- Config specific to Avalon MM manager interfaces.
+-- | Config specific to Avalon MM manager interfaces.
 -- @Bool@ values represent whether to keep a boolean field or not.
 -- @Nat@ values represent the width of a variable-sized numeric field.
 -- An @AvalonMMSharedConfig@ is also included for the rest of the fields.
@@ -152,87 +158,114 @@ data AvalonMMManagerConfig
 
 -- Grab record fields at the type level:
 
+-- | Grab 'dataWidth' from 'AvalonMMSharedConfig' at the type level
 type family DataWidth (c :: AvalonMMSharedConfig) where
   DataWidth ('AvalonMMSharedConfig a _ _ _ _ _ _ _ _ _ _ _) = a
 
+-- | Grab 'keepReadData' from 'AvalonMMSharedConfig' at the type level
 type family KeepReadData (c :: AvalonMMSharedConfig) where
   KeepReadData ('AvalonMMSharedConfig _ a _ _ _ _ _ _ _ _ _ _) = a
 
+-- | Grab 'keepWriteData' from 'AvalonMMSharedConfig' at the type level
 type family KeepWriteData (c :: AvalonMMSharedConfig) where
   KeepWriteData ('AvalonMMSharedConfig _ _ a _ _ _ _ _ _ _ _ _) = a
 
+-- | Grab 'addrWidth' from 'AvalonMMSharedConfig' at the type level
 type family AddrWidth (c :: AvalonMMSharedConfig) where
   AddrWidth ('AvalonMMSharedConfig _ _ _ a _ _ _ _ _ _ _ _) = a
 
+-- | Grab 'keepRead' from 'AvalonMMSharedConfig' at the type level
 type family KeepRead (c :: AvalonMMSharedConfig) where
   KeepRead ('AvalonMMSharedConfig _ _ _ _ a _ _ _ _ _ _ _) = a
 
+-- | Grab 'keepWrite' from 'AvalonMMSharedConfig' at the type level
 type family KeepWrite (c :: AvalonMMSharedConfig) where
   KeepWrite ('AvalonMMSharedConfig _ _ _ _ _ a _ _ _ _ _ _) = a
 
+-- | Grab 'byteEnableWidth' from 'AvalonMMSharedConfig' at the type level
 type family ByteEnableWidth (c :: AvalonMMSharedConfig) where
   ByteEnableWidth ('AvalonMMSharedConfig _ _ _ _ _ _ a _ _ _ _ _) = a
 
+-- | Grab 'keepByteEnable' from 'AvalonMMSharedConfig' at the type level
 type family KeepByteEnable (c :: AvalonMMSharedConfig) where
   KeepByteEnable ('AvalonMMSharedConfig _ _ _ _ _ _ _ a _ _ _ _) = a
 
+-- | Grab 'burstCountWidth' from 'AvalonMMSharedConfig' at the type level
 type family BurstCountWidth (c :: AvalonMMSharedConfig) where
   BurstCountWidth ('AvalonMMSharedConfig _ _ _ _ _ _ _ _ a _ _ _) = a
 
+-- | Grab 'keepBurstCount' from 'AvalonMMSharedConfig' at the type level
 type family KeepBurstCount (c :: AvalonMMSharedConfig) where
   KeepBurstCount ('AvalonMMSharedConfig _ _ _ _ _ _ _ _ _ a _ _) = a
 
+-- | Grab 'keepReadDataValid' from 'AvalonMMSharedConfig' at the type level
 type family KeepReadDataValid (c :: AvalonMMSharedConfig) where
   KeepReadDataValid ('AvalonMMSharedConfig _ _ _ _ _ _ _ _ _ _ a _) = a
 
+-- | Grab 'keepEndOfPacket' from 'AvalonMMSharedConfig' at the type level
 type family KeepEndOfPacket (c :: AvalonMMSharedConfig) where
   KeepEndOfPacket ('AvalonMMSharedConfig _ _ _ _ _ _ _ _ _ _ _ a) = a
 
 
+-- | Grab 'keepAddr' from 'AvalonMMSubordinateConfig' at the type level
 type family KeepAddr (c :: AvalonMMSubordinateConfig) where
   KeepAddr ('AvalonMMSubordinateConfig a _ _ _ _ _ _ _ _ _) = a
 
+-- | Grab 'keepWriteByteEnable' from 'AvalonMMSubordinateConfig' at the type level
 type family KeepWriteByteEnable (c :: AvalonMMSubordinateConfig) where
   KeepWriteByteEnable ('AvalonMMSubordinateConfig _ a _ _ _ _ _ _ _ _) = a
 
+-- | Grab 'keepChipSelect' from 'AvalonMMSubordinateConfig' at the type level
 type family KeepChipSelect (c :: AvalonMMSubordinateConfig) where
   KeepChipSelect ('AvalonMMSubordinateConfig _ _ a _ _ _ _ _ _ _) = a
 
+-- | Grab 'keepBeginTransfer' from 'AvalonMMSubordinateConfig' at the type level
 type family KeepBeginTransfer (c :: AvalonMMSubordinateConfig) where
   KeepBeginTransfer ('AvalonMMSubordinateConfig _ _ _ a _ _ _ _ _ _) = a
 
+-- | Grab 'keepWaitRequest' from 'AvalonMMSubordinateConfig' at the type level
 type family KeepWaitRequest (c :: AvalonMMSubordinateConfig) where
   KeepWaitRequest ('AvalonMMSubordinateConfig _ _ _ _ a _ _ _ _ _) = a
 
+-- | Grab 'keepBeginBurstTransfer' from 'AvalonMMSubordinateConfig' at the type level
 type family KeepBeginBurstTransfer (c :: AvalonMMSubordinateConfig) where
   KeepBeginBurstTransfer ('AvalonMMSubordinateConfig _ _ _ _ _ a _ _ _ _) = a
 
+-- | Grab 'keepReadyForData' from 'AvalonMMSubordinateConfig' at the type level
 type family KeepReadyForData (c :: AvalonMMSubordinateConfig) where
   KeepReadyForData ('AvalonMMSubordinateConfig _ _ _ _ _ _ a _ _ _) = a
 
+-- | Grab 'keepDataAvailable' from 'AvalonMMSubordinateConfig' at the type level
 type family KeepDataAvailable (c :: AvalonMMSubordinateConfig) where
   KeepDataAvailable ('AvalonMMSubordinateConfig _ _ _ _ _ _ _ a _ _) = a
 
+-- | Grab 'keepIrq' from 'AvalonMMSubordinateConfig' at the type level
 type family KeepIrq (c :: AvalonMMSubordinateConfig) where
   KeepIrq ('AvalonMMSubordinateConfig _ _ _ _ _ _ _ _ a _) = a
 
+-- | Grab 'sShared' from 'AvalonMMSubordinateConfig' at the type level
 type family SShared (c :: AvalonMMSubordinateConfig) where
   SShared ('AvalonMMSubordinateConfig _ _ _ _ _ _ _ _ _ a) = a
 
 
+-- | Grab 'keepFlush' from 'AvalonMMManagerConfig' at the type level
 type family KeepFlush (c :: AvalonMMManagerConfig) where
   KeepFlush ('AvalonMMManagerConfig a _ _ _) = a
 
+-- | Grab 'keepIrqList' from 'AvalonMMManagerConfig' at the type level
 type family KeepIrqList (c :: AvalonMMManagerConfig) where
   KeepIrqList ('AvalonMMManagerConfig _ a _ _) = a
 
+-- | Grab 'keepIrqNumber' from 'AvalonMMManagerConfig' at the type level
 type family KeepIrqNumber (c :: AvalonMMManagerConfig) where
   KeepIrqNumber ('AvalonMMManagerConfig _ _ a _) = a
 
+-- | Grab 'mShared' from 'AvalonMMManagerConfig' at the type level
 type family MShared (c :: AvalonMMManagerConfig) where
   MShared ('AvalonMMManagerConfig _ _ _ a) = a
 
 
+-- | Disable fields of 'AvalonMMSubordinateConfig' that are not allowed in the 'DfConv.DfConv' instance
 type family RemoveNonDfSubordinate (cfg :: AvalonMMSubordinateConfig) where
   RemoveNonDfSubordinate cfg
     = 'AvalonMMSubordinateConfig
@@ -247,6 +280,7 @@ type family RemoveNonDfSubordinate (cfg :: AvalonMMSubordinateConfig) where
       'False
       (SShared cfg)
 
+-- | Disable fields of 'AvalonMMManagerConfig' that are not allowed in the 'DfConv.DfConv' instance
 type family RemoveNonDfManager (cfg :: AvalonMMManagerConfig) where
   RemoveNonDfManager cfg
     = 'AvalonMMManagerConfig
@@ -256,10 +290,10 @@ type family RemoveNonDfManager (cfg :: AvalonMMManagerConfig) where
       (MShared cfg)
 
 
--- TODO representing a well-behaved shared config.
+-- | Constraint representing a well-behaved shared config.
 -- This class holds for every possible @AvalonMMSharedConfig@,
 -- but we need to write out the class anyway so that GHC holds.
-type GoodMMSharedConfig config =
+type KnownMMSharedConfig config =
   ( KnownNat      (DataWidth         config)
   , KeepTypeClass (KeepReadData      config)
   , KeepTypeClass (KeepWriteData     config)
@@ -298,10 +332,10 @@ type GoodMMSharedConfig config =
   , Eq      (KeepType (KeepBurstCount config) (Unsigned (BurstCountWidth config)))
   )
 
--- Class representing a well-behaved subordinate config.
+-- | Constraint representing a well-behaved subordinate config.
 -- This class holds for every possible @AvalonMMSubordinateConfig@,
 -- but we need to write out the class anyway so that GHC holds.
-type GoodMMSubordinateConfig config =
+type KnownMMSubordinateConfig config =
   ( KeepTypeClass (KeepAddr               config)
   , KeepTypeClass (KeepWriteByteEnable    config)
   , KeepTypeClass (KeepChipSelect         config)
@@ -311,7 +345,7 @@ type GoodMMSubordinateConfig config =
   , KeepTypeClass (KeepReadyForData       config)
   , KeepTypeClass (KeepDataAvailable      config)
   , KeepTypeClass (KeepIrq                config)
-  , GoodMMSharedConfig (SShared           config)
+  , KnownMMSharedConfig (SShared           config)
 
   , NFDataX (KeepType (KeepAddr config) (Unsigned (AddrWidth (SShared config))))
   , NFData  (KeepType (KeepAddr config) (Unsigned (AddrWidth (SShared config))))
@@ -326,14 +360,14 @@ type GoodMMSubordinateConfig config =
   , Eq      (KeepType (KeepWriteByteEnable config) (Unsigned (ByteEnableWidth (SShared config))))
   )
 
--- Class representing a well-behaved manager config.
+-- | Constraint representing a well-behaved manager config.
 -- This class holds for every possible @AvalonMMManagerConfig@,
 -- but we need to write out the class anyway so that GHC holds.
-type GoodMMManagerConfig config =
+type KnownMMManagerConfig config =
   ( KeepTypeClass (KeepFlush     config)
   , KeepTypeClass (KeepIrqList   config)
   , KeepTypeClass (KeepIrqNumber config)
-  , GoodMMSharedConfig (MShared  config)
+  , KnownMMSharedConfig (MShared  config)
 
   , NFDataX (KeepType (KeepIrqList config) (Unsigned 32))
   , NFData  (KeepType (KeepIrqList config) (Unsigned 32))
@@ -349,7 +383,7 @@ type GoodMMManagerConfig config =
   )
 
 
--- Data coming out of an Avalon MM manager port.
+-- | Data coming out of an Avalon MM manager port.
 -- All fields are optional and can be toggled using the config.
 data AvalonManagerOut config
   =  AvalonManagerOut
@@ -363,19 +397,19 @@ data AvalonManagerOut config
   }
   deriving (Generic, Bundle)
 
-deriving instance (GoodMMManagerConfig config)
+deriving instance (KnownMMManagerConfig config)
                    => NFDataX (AvalonManagerOut config)
-deriving instance (GoodMMManagerConfig config)
+deriving instance (KnownMMManagerConfig config)
                    => NFData (AvalonManagerOut config)
-deriving instance (GoodMMManagerConfig config)
+deriving instance (KnownMMManagerConfig config)
                    => ShowX (AvalonManagerOut config)
-deriving instance (GoodMMManagerConfig config)
+deriving instance (KnownMMManagerConfig config)
                    => Show (AvalonManagerOut config)
-deriving instance (GoodMMManagerConfig config)
+deriving instance (KnownMMManagerConfig config)
                    => Eq (AvalonManagerOut config)
 
 
--- Data coming into an Avalon MM manager port.
+-- | Data coming into an Avalon MM manager port.
 -- Almost all fields are optional and can be toggled using the config.
 -- WaitRequest is mandatory.
 data AvalonManagerIn config
@@ -389,19 +423,19 @@ data AvalonManagerIn config
   }
   deriving (Generic, Bundle)
 
-deriving instance (GoodMMManagerConfig config)
+deriving instance (KnownMMManagerConfig config)
                    => NFDataX (AvalonManagerIn config)
-deriving instance (GoodMMManagerConfig config)
+deriving instance (KnownMMManagerConfig config)
                    => NFData (AvalonManagerIn config)
-deriving instance (GoodMMManagerConfig config)
+deriving instance (KnownMMManagerConfig config)
                    => ShowX (AvalonManagerIn config)
-deriving instance (GoodMMManagerConfig config)
+deriving instance (KnownMMManagerConfig config)
                    => Show (AvalonManagerIn config)
-deriving instance (GoodMMManagerConfig config)
+deriving instance (KnownMMManagerConfig config)
                    => Eq (AvalonManagerIn config)
 
 
--- Data coming out of an Avalon MM subordinate port.
+-- | Data coming out of an Avalon MM subordinate port.
 -- All fields are optional and can be toggled using the config.
 data AvalonSubordinateOut config
   =  AvalonSubordinateOut
@@ -415,19 +449,19 @@ data AvalonSubordinateOut config
   }
   deriving (Generic, Bundle)
 
-deriving instance (GoodMMSubordinateConfig config)
+deriving instance (KnownMMSubordinateConfig config)
                    => NFDataX (AvalonSubordinateOut config)
-deriving instance (GoodMMSubordinateConfig config)
+deriving instance (KnownMMSubordinateConfig config)
                    => NFData (AvalonSubordinateOut config)
-deriving instance (GoodMMSubordinateConfig config)
+deriving instance (KnownMMSubordinateConfig config)
                    => ShowX (AvalonSubordinateOut config)
-deriving instance (GoodMMSubordinateConfig config)
+deriving instance (KnownMMSubordinateConfig config)
                    => Show (AvalonSubordinateOut config)
-deriving instance (GoodMMSubordinateConfig config)
+deriving instance (KnownMMSubordinateConfig config)
                    => Eq (AvalonSubordinateOut config)
 
 
--- Data coming into an Avalon MM subordinate port.
+-- | Data coming into an Avalon MM subordinate port.
 -- All fields are optional and can be toggled using the config.
 data AvalonSubordinateIn config
   = AvalonSubordinateIn
@@ -444,19 +478,19 @@ data AvalonSubordinateIn config
   }
   deriving (Generic, Bundle)
 
-deriving instance (GoodMMSubordinateConfig config)
+deriving instance (KnownMMSubordinateConfig config)
                    => NFDataX (AvalonSubordinateIn config)
-deriving instance (GoodMMSubordinateConfig config)
+deriving instance (KnownMMSubordinateConfig config)
                    => NFData (AvalonSubordinateIn config)
-deriving instance (GoodMMSubordinateConfig config)
+deriving instance (KnownMMSubordinateConfig config)
                    => ShowX (AvalonSubordinateIn config)
-deriving instance (GoodMMSubordinateConfig config)
+deriving instance (KnownMMSubordinateConfig config)
                    => Show (AvalonSubordinateIn config)
-deriving instance (GoodMMSubordinateConfig config)
+deriving instance (KnownMMSubordinateConfig config)
                    => Eq (AvalonSubordinateIn config)
 
 
--- TODO comment
+-- | "Important" data pertaining to write transfers. Can be grabbed from 'AvalonManagerOut' or 'AvalonSubordinateIn'.
 data AvalonWriteImpt keepAddr config
   = AvalonWriteImpt
   { wi_writeData  :: KeepType (KeepWriteData config) (Unsigned (DataWidth config))
@@ -466,28 +500,28 @@ data AvalonWriteImpt keepAddr config
   }
   deriving (Generic, Bundle)
 
-deriving instance (GoodMMSharedConfig config,
+deriving instance (KnownMMSharedConfig config,
                    NFDataX (KeepType keepAddr (Unsigned (AddrWidth config))),
                    KeepTypeClass keepAddr)
                    => NFDataX (AvalonWriteImpt keepAddr config)
-deriving instance (GoodMMSharedConfig config,
+deriving instance (KnownMMSharedConfig config,
                    NFData (KeepType keepAddr (Unsigned (AddrWidth config))),
                    KeepTypeClass keepAddr)
                    => NFData (AvalonWriteImpt keepAddr config)
-deriving instance (GoodMMSharedConfig config,
+deriving instance (KnownMMSharedConfig config,
                    ShowX (KeepType keepAddr (Unsigned (AddrWidth config))),
                    KeepTypeClass keepAddr)
                    => ShowX (AvalonWriteImpt keepAddr config)
-deriving instance (GoodMMSharedConfig config,
+deriving instance (KnownMMSharedConfig config,
                    Show (KeepType keepAddr (Unsigned (AddrWidth config))),
                    KeepTypeClass keepAddr)
                    => Show (AvalonWriteImpt keepAddr config)
-deriving instance (GoodMMSharedConfig config,
+deriving instance (KnownMMSharedConfig config,
                    Eq (KeepType keepAddr (Unsigned (AddrWidth config))),
                    KeepTypeClass keepAddr)
                    => Eq (AvalonWriteImpt keepAddr config)
 
--- TODO comment
+-- | "Important" data pertaining to read requests. Can be grabbed from 'AvalonManagerOut' or 'AvalonSubordinateIn'.
 data AvalonReadReqImpt keepAddr config
   = AvalonReadReqImpt
   { rri_addr       :: KeepType keepAddr (Unsigned (AddrWidth config))
@@ -496,27 +530,28 @@ data AvalonReadReqImpt keepAddr config
   }
   deriving (Generic, Bundle)
 
-deriving instance (GoodMMSharedConfig config,
+deriving instance (KnownMMSharedConfig config,
                    NFDataX (KeepType keepAddr (Unsigned (AddrWidth config))),
                    KeepTypeClass keepAddr)
                    => NFDataX (AvalonReadReqImpt keepAddr config)
-deriving instance (GoodMMSharedConfig config,
+deriving instance (KnownMMSharedConfig config,
                    NFData (KeepType keepAddr (Unsigned (AddrWidth config))),
                    KeepTypeClass keepAddr)
                    => NFData (AvalonReadReqImpt keepAddr config)
-deriving instance (GoodMMSharedConfig config,
+deriving instance (KnownMMSharedConfig config,
                    ShowX (KeepType keepAddr (Unsigned (AddrWidth config))),
                    KeepTypeClass keepAddr)
                    => ShowX (AvalonReadReqImpt keepAddr config)
-deriving instance (GoodMMSharedConfig config,
+deriving instance (KnownMMSharedConfig config,
                    Show (KeepType keepAddr (Unsigned (AddrWidth config))),
                    KeepTypeClass keepAddr)
                    => Show (AvalonReadReqImpt keepAddr config)
-deriving instance (GoodMMSharedConfig config,
+deriving instance (KnownMMSharedConfig config,
                    Eq (KeepType keepAddr (Unsigned (AddrWidth config))),
                    KeepTypeClass keepAddr)
                    => Eq (AvalonReadReqImpt keepAddr config)
 
+-- | "Important" data pertaining to subordinate-to-master read data. Can be grabbed from 'AvalonManagerIn' or 'AvalonSubordinateOut'.
 data AvalonReadImpt config
   = AvalonReadImpt
   { ri_readData    :: KeepType (KeepReadData config) (Unsigned (DataWidth config))
@@ -524,31 +559,21 @@ data AvalonReadImpt config
   }
   deriving (Generic, Bundle)
 
-deriving instance (GoodMMSharedConfig config)
+deriving instance (KnownMMSharedConfig config)
                    => NFDataX (AvalonReadImpt config)
-deriving instance (GoodMMSharedConfig config)
+deriving instance (KnownMMSharedConfig config)
                    => NFData (AvalonReadImpt config)
-deriving instance (GoodMMSharedConfig config)
+deriving instance (KnownMMSharedConfig config)
                    => ShowX (AvalonReadImpt config)
-deriving instance (GoodMMSharedConfig config)
+deriving instance (KnownMMSharedConfig config)
                    => Show (AvalonReadImpt config)
-deriving instance (GoodMMSharedConfig config)
+deriving instance (KnownMMSharedConfig config)
                    => Eq (AvalonReadImpt config)
 
 
-managerOutAddNonDf ::
-  GoodMMManagerConfig cfg =>
-  KeepType (KeepFlush cfg) Bool ->
-  AvalonManagerOut (RemoveNonDfManager cfg) ->
-  AvalonManagerOut cfg
-managerOutAddNonDf flush AvalonManagerOut{..}
-  = AvalonManagerOut
-  { mo_addr, mo_read, mo_write, mo_byteEnable, mo_burstCount, mo_writeData
-  , mo_flush = flush
-  }
-
+-- | Given an 'AvalonManagerOut', separate out the parts which are not compatible with 'DfConv.DfConv'.
 managerOutRemoveNonDf ::
-  GoodMMManagerConfig cfg =>
+  KnownMMManagerConfig cfg =>
   AvalonManagerOut cfg ->
   ( AvalonManagerOut (RemoveNonDfManager cfg)
   , KeepType (KeepFlush cfg) Bool )
@@ -558,21 +583,21 @@ managerOutRemoveNonDf AvalonManagerOut{..}
   , mo_flush = keepTypeFalse
   }, mo_flush)
 
-managerInAddNonDf ::
-  GoodMMManagerConfig cfg =>
-  ( KeepType (KeepIrqList cfg) (Unsigned 32)
-  , KeepType (KeepIrqNumber cfg) (Maybe (Unsigned 6)) ) ->
-  AvalonManagerIn (RemoveNonDfManager cfg) ->
-  AvalonManagerIn cfg
-managerInAddNonDf (irqList, irqNumber) AvalonManagerIn{..}
-  = AvalonManagerIn
-  { mi_readData, mi_waitRequest, mi_readDataValid, mi_endOfPacket
-  , mi_irqList = irqList
-  , mi_irqNumber = irqNumber
+-- | Given an 'AvalonManagerOut' which is compatible with 'DfConv.DfConv', add back in the parts which are not compatible with 'DfConv.DfConv'.
+managerOutAddNonDf ::
+  KnownMMManagerConfig cfg =>
+  KeepType (KeepFlush cfg) Bool ->
+  AvalonManagerOut (RemoveNonDfManager cfg) ->
+  AvalonManagerOut cfg
+managerOutAddNonDf flush AvalonManagerOut{..}
+  = AvalonManagerOut
+  { mo_addr, mo_read, mo_write, mo_byteEnable, mo_burstCount, mo_writeData
+  , mo_flush = flush
   }
 
+-- | Given an 'AvalonManagerIn', separate out the parts which are not compatible with 'DfConv.DfConv'.
 managerInRemoveNonDf ::
-  GoodMMManagerConfig cfg =>
+  KnownMMManagerConfig cfg =>
   AvalonManagerIn cfg ->
   ( AvalonManagerIn (RemoveNonDfManager cfg)
   , ( KeepType (KeepIrqList cfg) (Unsigned 32)
@@ -584,23 +609,23 @@ managerInRemoveNonDf AvalonManagerIn{..}
   , mi_irqNumber = keepTypeFalse
   }, (mi_irqList, mi_irqNumber))
 
-subordinateOutAddNonDf ::
-  GoodMMSubordinateConfig cfg =>
-  ( KeepType (KeepReadyForData cfg) Bool
-  , KeepType (KeepDataAvailable cfg) Bool
-  , KeepType (KeepIrq cfg) Bool ) ->
-  AvalonSubordinateOut (RemoveNonDfSubordinate cfg) ->
-  AvalonSubordinateOut cfg
-subordinateOutAddNonDf (readyForData, dataAvailable, irq) AvalonSubordinateOut{..}
-  = AvalonSubordinateOut
-  { so_waitRequest, so_readDataValid, so_endOfPacket, so_readData
-  , so_readyForData = readyForData
-  , so_dataAvailable = dataAvailable
-  , so_irq = irq
+-- | Given an 'AvalonManagerIn' which is compatible with 'DfConv.DfConv', add back in the parts which are not compatible with 'DfConv.DfConv'.
+managerInAddNonDf ::
+  KnownMMManagerConfig cfg =>
+  ( KeepType (KeepIrqList cfg) (Unsigned 32)
+  , KeepType (KeepIrqNumber cfg) (Maybe (Unsigned 6)) ) ->
+  AvalonManagerIn (RemoveNonDfManager cfg) ->
+  AvalonManagerIn cfg
+managerInAddNonDf (irqList, irqNumber) AvalonManagerIn{..}
+  = AvalonManagerIn
+  { mi_readData, mi_waitRequest, mi_readDataValid, mi_endOfPacket
+  , mi_irqList = irqList
+  , mi_irqNumber = irqNumber
   }
 
+-- | Given an 'AvalonSubordinateOut', separate out the parts which are not compatible with 'DfConv.DfConv'.
 subordinateOutRemoveNonDf ::
-  GoodMMSubordinateConfig cfg =>
+  KnownMMSubordinateConfig cfg =>
   AvalonSubordinateOut cfg ->
   ( AvalonSubordinateOut (RemoveNonDfSubordinate cfg)
   , ( KeepType (KeepReadyForData cfg) Bool
@@ -614,21 +639,25 @@ subordinateOutRemoveNonDf AvalonSubordinateOut{..}
   , so_irq = keepTypeFalse
   }, (so_readyForData, so_dataAvailable, so_irq))
 
-subordinateInAddNonDf ::
-  GoodMMSubordinateConfig cfg =>
-  ( KeepType (KeepBeginBurstTransfer cfg) Bool
-  , KeepType (KeepBeginTransfer cfg) Bool ) ->
-  AvalonSubordinateIn (RemoveNonDfSubordinate cfg) ->
-  AvalonSubordinateIn cfg
-subordinateInAddNonDf (beginBurstTransfer, beginTransfer) AvalonSubordinateIn{..}
-  = AvalonSubordinateIn
-  { si_chipSelect, si_addr, si_read, si_write, si_byteEnable, si_writeByteEnable, si_burstCount, si_writeData
-  , si_beginBurstTransfer = beginBurstTransfer
-  , si_beginTransfer = beginTransfer
+-- | Given an 'AvalonSubordinateOut' which is compatible with 'DfConv.DfConv', add back in the parts which are not compatible with 'DfConv.DfConv'.
+subordinateOutAddNonDf ::
+  KnownMMSubordinateConfig cfg =>
+  ( KeepType (KeepReadyForData cfg) Bool
+  , KeepType (KeepDataAvailable cfg) Bool
+  , KeepType (KeepIrq cfg) Bool ) ->
+  AvalonSubordinateOut (RemoveNonDfSubordinate cfg) ->
+  AvalonSubordinateOut cfg
+subordinateOutAddNonDf (readyForData, dataAvailable, irq) AvalonSubordinateOut{..}
+  = AvalonSubordinateOut
+  { so_waitRequest, so_readDataValid, so_endOfPacket, so_readData
+  , so_readyForData = readyForData
+  , so_dataAvailable = dataAvailable
+  , so_irq = irq
   }
 
+-- | Given an 'AvalonSubordinateIn', separate out the parts which are not compatible with 'DfConv.DfConv'.
 subordinateInRemoveNonDf ::
-  GoodMMSubordinateConfig cfg =>
+  KnownMMSubordinateConfig cfg =>
   AvalonSubordinateIn cfg ->
   ( AvalonSubordinateIn (RemoveNonDfSubordinate cfg)
   , ( KeepType (KeepBeginBurstTransfer cfg) Bool
@@ -640,10 +669,24 @@ subordinateInRemoveNonDf AvalonSubordinateIn{..}
   , si_beginTransfer = keepTypeFalse
   }, (si_beginBurstTransfer, si_beginTransfer))
 
--- Convert a boolean value to an @AvalonSubordinateOut@ structure.
+-- | Given an 'AvalonSubordinateIn' which is compatible with 'DfConv.DfConv', add back in the parts which are not compatible with 'DfConv.DfConv'.
+subordinateInAddNonDf ::
+  KnownMMSubordinateConfig cfg =>
+  ( KeepType (KeepBeginBurstTransfer cfg) Bool
+  , KeepType (KeepBeginTransfer cfg) Bool ) ->
+  AvalonSubordinateIn (RemoveNonDfSubordinate cfg) ->
+  AvalonSubordinateIn cfg
+subordinateInAddNonDf (beginBurstTransfer, beginTransfer) AvalonSubordinateIn{..}
+  = AvalonSubordinateIn
+  { si_chipSelect, si_addr, si_read, si_write, si_byteEnable, si_writeByteEnable, si_burstCount, si_writeData
+  , si_beginBurstTransfer = beginBurstTransfer
+  , si_beginTransfer = beginTransfer
+  }
+
+-- | Convert a boolean value to an @AvalonSubordinateOut@ structure.
 -- The structure gives no read data, no IRQ, etc.
--- Fields relating to "acknowledging" a write are controlled by the bool input.
-boolToMMSubordinateAck :: (GoodMMSubordinateConfig config) => Bool -> AvalonSubordinateOut config
+-- Fields relating to "acknowledging" a write, or a read request, are controlled by the bool input.
+boolToMMSubordinateAck :: (KnownMMSubordinateConfig config) => Bool -> AvalonSubordinateOut config
 boolToMMSubordinateAck ack
   = AvalonSubordinateOut
     { so_waitRequest   = toKeepType (not ack)
@@ -655,21 +698,36 @@ boolToMMSubordinateAck ack
     , so_readData      = errorX "No readData for boolToAck"
     }
 
--- TODO comment here and below also rename this
-mmSubordinateReadDat :: (GoodMMSubordinateConfig config) => AvalonReadImpt (SShared config) -> AvalonSubordinateOut config
-mmSubordinateReadDat dat
+-- | Convert a boolean value to an @AvalonManagerIn@ structure.
+-- The structure gives no read data, no IRQ, etc.
+-- The @waitRequest@ field is controlled by the (negated) boolean input.
+boolToMMManagerAck :: (KnownMMManagerConfig config) => Bool -> AvalonManagerIn config
+boolToMMManagerAck ack
+  = AvalonManagerIn
+  { mi_waitRequest   = not ack
+  , mi_readDataValid = toKeepType False
+  , mi_endOfPacket   = toKeepType False
+  , mi_irqList       = toKeepType 0
+  , mi_irqNumber     = toKeepType Nothing
+  , mi_readData      = errorX "No readData for boolToAck"
+  }
+
+-- | Convert an 'AvalonReadImpt' into an 'AvalonSubordinateOut' containing that read data.
+mmReadImptToSubordinateOut :: (KnownMMSubordinateConfig config, config ~ RemoveNonDfSubordinate config) => AvalonReadImpt (SShared config) -> AvalonSubordinateOut config
+mmReadImptToSubordinateOut dat
   = AvalonSubordinateOut
     { so_waitRequest   = toKeepType False
     , so_readDataValid = toKeepType True
-    , so_readyForData  = toKeepType False
-    , so_dataAvailable = toKeepType False
+    , so_readyForData  = keepTypeFalse
+    , so_dataAvailable = keepTypeFalse
     , so_endOfPacket   = ri_endOfPacket dat
-    , so_irq           = toKeepType False
+    , so_irq           = keepTypeFalse
     , so_readData      = ri_readData dat
     }
 
--- TODO comment, mention that it needs to have 0 fixed wait time
-mmSubordinateOutToReadImpt :: (GoodMMSubordinateConfig config) => AvalonSubordinateOut config -> Maybe (AvalonReadImpt (SShared config))
+-- | Grab the important read information from an 'AvalonSubordinateOut', putting it into an 'AvalonReadImpt'.
+-- Only works if fixed wait time is 0.
+mmSubordinateOutToReadImpt :: (KnownMMSubordinateConfig config, config ~ RemoveNonDfSubordinate config) => AvalonSubordinateOut config -> Maybe (AvalonReadImpt (SShared config))
 mmSubordinateOutToReadImpt (AvalonSubordinateOut{..})
   = if cond then Just AvalonReadImpt
   { ri_endOfPacket = so_endOfPacket
@@ -678,7 +736,21 @@ mmSubordinateOutToReadImpt (AvalonSubordinateOut{..})
   where
   cond = fromKeepTypeDef True so_readDataValid && not (fromKeepTypeDef False so_waitRequest)
 
-mmManagerInToReadImpt :: (GoodMMManagerConfig config) => AvalonManagerIn config -> Maybe (AvalonReadImpt (MShared config))
+-- | Convert an 'AvalonReadImpt' into an 'AvalonManagerIn' containing that read data.
+mmReadImptToManagerIn :: (KnownMMManagerConfig config, config ~ RemoveNonDfManager config) => AvalonReadImpt (MShared config) -> AvalonManagerIn config
+mmReadImptToManagerIn dat
+  = AvalonManagerIn
+  { mi_waitRequest   = False
+  , mi_readDataValid = toKeepType True
+  , mi_endOfPacket   = ri_endOfPacket dat
+  , mi_irqList       = keepTypeFalse
+  , mi_irqNumber     = keepTypeFalse
+  , mi_readData      = ri_readData dat
+  }
+
+-- | Grab the important read information from an 'AvalonManagerIn', putting it into an 'AvalonReadImpt'.
+-- Only works if fixed wait time is 0.
+mmManagerInToReadImpt :: (KnownMMManagerConfig config, config ~ RemoveNonDfManager config) => AvalonManagerIn config -> Maybe (AvalonReadImpt (MShared config))
 mmManagerInToReadImpt (AvalonManagerIn{..})
   = if cond then Just AvalonReadImpt
   { ri_endOfPacket = mi_endOfPacket
@@ -687,7 +759,24 @@ mmManagerInToReadImpt (AvalonManagerIn{..})
   where
   cond = fromKeepTypeDef True mi_readDataValid
 
-mmSubordinateInToWriteImpt :: (GoodMMSubordinateConfig config) => AvalonSubordinateIn config -> Maybe (AvalonWriteImpt (KeepAddr config) (SShared config))
+-- | Convert an 'AvalonWriteImpt' into an 'AvalonSubordinateIn' containing that write data.
+mmWriteImptToSubordinateIn :: (KnownMMSubordinateConfig config, config ~ RemoveNonDfSubordinate config) => AvalonWriteImpt (KeepAddr config) (SShared config) -> AvalonSubordinateIn config
+mmWriteImptToSubordinateIn (AvalonWriteImpt{..})
+  = AvalonSubordinateIn
+  { si_chipSelect         = toKeepType True
+  , si_addr               = wi_addr
+  , si_read               = toKeepType False
+  , si_write              = toKeepType True
+  , si_byteEnable         = wi_byteEnable
+  , si_writeByteEnable    = convKeepType (bitCoerce $ repeat True) wi_byteEnable
+  , si_beginTransfer      = keepTypeFalse
+  , si_burstCount         = wi_burstCount
+  , si_beginBurstTransfer = keepTypeFalse
+  , si_writeData          = wi_writeData
+  }
+
+-- | Grab the important write information from an 'AvalonSubordinateIn', putting it into an 'AvalonWriteImpt'.
+mmSubordinateInToWriteImpt :: (KnownMMSubordinateConfig config, config ~ RemoveNonDfSubordinate config) => AvalonSubordinateIn config -> Maybe (AvalonWriteImpt (KeepAddr config) (SShared config))
 mmSubordinateInToWriteImpt (AvalonSubordinateIn{..})
   = if cond then Just AvalonWriteImpt
   { wi_addr               = si_addr
@@ -699,10 +788,51 @@ mmSubordinateInToWriteImpt (AvalonSubordinateIn{..})
   cond =  fromKeepTypeDef True si_chipSelect
        && fromKeepTypeDef True si_write
        && not (fromKeepTypeDef False si_read)
-       -- && 0 /= fromKeepTypeDef 1 si_byteEnable
-       -- && 0 /= fromKeepTypeDef 1 si_writeByteEnable
 
-mmSubordinateInToReadReqImpt :: (GoodMMSubordinateConfig config) => AvalonSubordinateIn config -> Maybe (AvalonReadReqImpt (KeepAddr config) (SShared config))
+-- | Convert an 'AvalonWriteImpt' into an 'AvalonManagerOut' containing that write data.
+mmWriteImptToManagerOut :: (KnownMMManagerConfig config, config ~ RemoveNonDfManager config) => AvalonWriteImpt 'True (MShared config) -> AvalonManagerOut config
+mmWriteImptToManagerOut (AvalonWriteImpt{..})
+  = AvalonManagerOut
+  { mo_addr        = fromKeepTypeTrue wi_addr
+  , mo_read        = toKeepType False
+  , mo_write       = toKeepType True
+  , mo_byteEnable  = wi_byteEnable
+  , mo_burstCount  = wi_burstCount
+  , mo_flush       = keepTypeFalse
+  , mo_writeData   = wi_writeData
+  }
+
+-- | Grab the important write information from an 'AvalonManagerOut', putting it into an 'AvalonWriteImpt'.
+mmManagerOutToWriteImpt :: (KnownMMManagerConfig config, config ~ RemoveNonDfManager config) => AvalonManagerOut config -> Maybe (AvalonWriteImpt 'True (MShared config))
+mmManagerOutToWriteImpt (AvalonManagerOut{..})
+  = if cond then Just AvalonWriteImpt
+  { wi_addr       = toKeepType mo_addr
+  , wi_byteEnable = mo_byteEnable
+  , wi_burstCount = mo_burstCount
+  , wi_writeData  = mo_writeData
+  } else Nothing
+  where
+  cond =  fromKeepTypeDef True mo_write
+       && not (fromKeepTypeDef False mo_read)
+
+-- | Convert an 'AvalonReadReqImpt' into an 'AvalonSubordinateIn' containing that read request data.
+mmReadReqImptToSubordinateIn :: (KnownMMSubordinateConfig config, config ~ RemoveNonDfSubordinate config) => AvalonReadReqImpt (KeepAddr config) (SShared config) -> AvalonSubordinateIn config
+mmReadReqImptToSubordinateIn (AvalonReadReqImpt{..})
+  = AvalonSubordinateIn
+  { si_chipSelect         = toKeepType True
+  , si_addr               = rri_addr
+  , si_read               = toKeepType True
+  , si_write              = toKeepType False
+  , si_byteEnable         = rri_byteEnable
+  , si_writeByteEnable    = toKeepType 0
+  , si_beginTransfer      = keepTypeFalse
+  , si_burstCount         = rri_burstCount
+  , si_beginBurstTransfer = keepTypeFalse
+  , si_writeData          = errorX "No writeData for read req"
+  }
+
+-- | Grab the important read request information from an 'AvalonSubordinateIn', putting it into an 'AvalonReadReqImpt'.
+mmSubordinateInToReadReqImpt :: (KnownMMSubordinateConfig config, config ~ RemoveNonDfSubordinate config) => AvalonSubordinateIn config -> Maybe (AvalonReadReqImpt (KeepAddr config) (SShared config))
 mmSubordinateInToReadReqImpt (AvalonSubordinateIn{..})
   = if cond then Just AvalonReadReqImpt
   { rri_addr               = si_addr
@@ -714,20 +844,21 @@ mmSubordinateInToReadReqImpt (AvalonSubordinateIn{..})
        && fromKeepTypeDef True si_read
        && not (fromKeepTypeDef False si_write)
 
-mmManagerOutToWriteImpt :: (GoodMMManagerConfig config) => AvalonManagerOut config -> Maybe (AvalonWriteImpt 'True (MShared config))
-mmManagerOutToWriteImpt (AvalonManagerOut{..})
-  = if cond then Just AvalonWriteImpt
-  { wi_addr       = toKeepType mo_addr
-  , wi_byteEnable = mo_byteEnable
-  , wi_burstCount = mo_burstCount
-  , wi_writeData  = mo_writeData
-  } else Nothing
-  where
-  cond =  fromKeepTypeDef True mo_write
-       && not (fromKeepTypeDef False mo_read)
-       -- && 0 /= fromKeepTypeDef 1 mo_byteEnable
+-- | Convert an 'AvalonReadReqImpt' into an 'AvalonManagerOut' containing that read request data.
+mmReadReqImptToManagerOut :: (KnownMMManagerConfig config, config ~ RemoveNonDfManager config) => AvalonReadReqImpt 'True (MShared config) -> AvalonManagerOut config
+mmReadReqImptToManagerOut (AvalonReadReqImpt{..})
+  = AvalonManagerOut
+  { mo_addr        = fromKeepTypeTrue rri_addr
+  , mo_read        = toKeepType True
+  , mo_write       = toKeepType False
+  , mo_byteEnable  = rri_byteEnable
+  , mo_burstCount  = rri_burstCount
+  , mo_flush       = keepTypeFalse
+  , mo_writeData   = errorX "No writeData for read req"
+  }
 
-mmManagerOutToReadReqImpt :: (GoodMMManagerConfig config) => AvalonManagerOut config -> Maybe (AvalonReadReqImpt 'True (MShared config))
+-- | Grab the important read request information from an 'AvalonManagerOut', putting it into an 'AvalonReadReqImpt'.
+mmManagerOutToReadReqImpt :: (KnownMMManagerConfig config, config ~ RemoveNonDfManager config) => AvalonManagerOut config -> Maybe (AvalonReadReqImpt 'True (MShared config))
 mmManagerOutToReadReqImpt (AvalonManagerOut{..})
   = if cond then Just AvalonReadReqImpt
   { rri_addr       = toKeepType mo_addr
@@ -737,94 +868,9 @@ mmManagerOutToReadReqImpt (AvalonManagerOut{..})
   where
   cond =  fromKeepTypeDef True mo_read
        && not (fromKeepTypeDef False mo_write)
-       -- && 0 /= fromKeepTypeDef 1 mo_byteEnable
 
--- TODO comment
-mmWriteImptToSubordinateIn :: (GoodMMSubordinateConfig config) => AvalonWriteImpt (KeepAddr config) (SShared config) -> AvalonSubordinateIn config
-mmWriteImptToSubordinateIn (AvalonWriteImpt{..})
-  = AvalonSubordinateIn
-  { si_chipSelect         = toKeepType True
-  , si_addr               = wi_addr
-  , si_read               = toKeepType False
-  , si_write              = toKeepType True
-  , si_byteEnable         = wi_byteEnable
-  , si_writeByteEnable    = toKeepType $ bitCoerce $ repeat True
-  , si_beginTransfer      = toKeepType False -- TODO?? I'll prob require that it's a dfconv config
-  , si_burstCount         = wi_burstCount
-  , si_beginBurstTransfer = toKeepType False -- TODO??
-  , si_writeData          = wi_writeData
-  }
-
--- TODO comment
-mmReadReqImptToSubordinateIn :: (GoodMMSubordinateConfig config) => AvalonReadReqImpt (KeepAddr config) (SShared config) -> AvalonSubordinateIn config
-mmReadReqImptToSubordinateIn (AvalonReadReqImpt{..})
-  = AvalonSubordinateIn
-  { si_chipSelect         = toKeepType True
-  , si_addr               = rri_addr
-  , si_read               = toKeepType True
-  , si_write              = toKeepType False
-  , si_byteEnable         = rri_byteEnable
-  , si_writeByteEnable    = toKeepType 0
-  , si_beginTransfer      = toKeepType False -- TODO?? dfconv config
-  , si_burstCount         = rri_burstCount
-  , si_beginBurstTransfer = toKeepType False -- TODO??
-  , si_writeData          = errorX "No writeData for read req"
-  }
-
--- TODO comment
-mmWriteImptToManagerOut :: (GoodMMManagerConfig config) => AvalonWriteImpt 'True (MShared config) -> AvalonManagerOut config
-mmWriteImptToManagerOut (AvalonWriteImpt{..})
-  = AvalonManagerOut
-  { mo_addr        = fromKeepTypeTrue wi_addr
-  , mo_read        = toKeepType False
-  , mo_write       = toKeepType True
-  , mo_byteEnable  = wi_byteEnable
-  , mo_burstCount  = wi_burstCount
-  , mo_flush       = toKeepType False
-  , mo_writeData   = wi_writeData
-  }
-
--- TODO comment
-mmReadReqImptToManagerOut :: (GoodMMManagerConfig config) => AvalonReadReqImpt 'True (MShared config) -> AvalonManagerOut config
-mmReadReqImptToManagerOut (AvalonReadReqImpt{..})
-  = AvalonManagerOut
-  { mo_addr        = fromKeepTypeTrue rri_addr
-  , mo_read        = toKeepType True
-  , mo_write       = toKeepType False
-  , mo_byteEnable  = rri_byteEnable
-  , mo_burstCount  = rri_burstCount
-  , mo_flush       = toKeepType False
-  , mo_writeData   = errorX "No writeData for read req"
-  }
-
--- Convert a boolean value to an @AvalonManagerIn@ structure.
--- The structure gives no read data, no IRQ, etc.
--- The @waitRequest@ field is controlled by the (negated) boolean input.
-boolToMMManagerAck :: (GoodMMManagerConfig config) => Bool -> AvalonManagerIn config
-boolToMMManagerAck ack
-  = AvalonManagerIn
-  { mi_waitRequest   = not ack
-  , mi_readDataValid = toKeepType False
-  , mi_endOfPacket   = toKeepType False
-  , mi_irqList       = toKeepType 0
-  , mi_irqNumber     = toKeepType Nothing
-  , mi_readData      = errorX "No readData for boolToAck"
-  }
-
--- An @AvalonManagerIn@ TODO comment
-mmManagerReadDat :: (GoodMMManagerConfig config) => AvalonReadImpt (MShared config) -> AvalonManagerIn config
-mmManagerReadDat dat
-  = AvalonManagerIn
-  { mi_waitRequest   = False
-  , mi_readDataValid = toKeepType True
-  , mi_endOfPacket   = ri_endOfPacket dat
-  , mi_irqList       = toKeepType 0
-  , mi_irqNumber     = toKeepType Nothing
-  , mi_readData      = ri_readData dat
-  }
-
--- An @AvalonSubordinateIn@ containing no write data, and indicating that no transmission is currently occurring.
-mmSubordinateInNoData :: (GoodMMSubordinateConfig config) => AvalonSubordinateIn config
+-- | An 'AvalonSubordinateIn' containing no write data, and indicating that no transmission is currently occurring.
+mmSubordinateInNoData :: (KnownMMSubordinateConfig config) => AvalonSubordinateIn config
 mmSubordinateInNoData
   = AvalonSubordinateIn
   { si_chipSelect         = toKeepType False
@@ -839,8 +885,8 @@ mmSubordinateInNoData
   , si_writeData          = errorX "No writeData for noData"
   }
 
--- An @AvalonManagerOut@ containing no write data, and indicating that no transmission is currently occurring.
-mmManagerOutNoData :: (GoodMMManagerConfig config) => AvalonManagerOut config
+-- | An 'AvalonManagerOut' containing no write data, and indicating that no transmission is currently occurring.
+mmManagerOutNoData :: (KnownMMManagerConfig config) => AvalonManagerOut config
 mmManagerOutNoData
   = AvalonManagerOut
   { mo_addr        = 0
@@ -852,20 +898,20 @@ mmManagerOutNoData
   , mo_writeData   = errorX "No writeData for noData"
   }
 
--- Grab the "acknowledgement" value from an @AvalonSubordinateOut@.
+-- | Grab the "acknowledgement" value from an 'AvalonSubordinateOut'.
 -- Reasonable defaults are provided for optional fields.
-mmSubordinateOutToBool :: (GoodMMSubordinateConfig config) => AvalonSubordinateOut config -> Bool
+mmSubordinateOutToBool :: (KnownMMSubordinateConfig config) => AvalonSubordinateOut config -> Bool
 mmSubordinateOutToBool so = fromKeepTypeDef True (so_readyForData so) && not (fromKeepTypeDef False (so_waitRequest so))
 
--- Grab the "acknowledgement" value from an @AvalonManagerIn@.
+-- | Grab the "acknowledgement" value from an 'AvalonManagerIn'.
 -- Reasonable defaults are provided for optional fields.
-mmManagerInToBool :: (GoodMMManagerConfig config) => AvalonManagerIn config -> Bool
+mmManagerInToBool :: (KnownMMManagerConfig config) => AvalonManagerIn config -> Bool
 mmManagerInToBool = not . mi_waitRequest
 
--- Datatype for the manager end of the Avalon memory-mapped protocol.
+-- | Datatype for the manager end of the Avalon memory-mapped protocol.
 data AvalonMMManager (dom :: Domain) (config :: AvalonMMManagerConfig) = AvalonMMManager
 
--- Datatype for the subordinate end of the Avalon memory-mapped protocol.
+-- | Datatype for the subordinate end of the Avalon memory-mapped protocol.
 data AvalonMMSubordinate (dom :: Domain) (fixedWaitTime :: Nat) (config :: AvalonMMSubordinateConfig) = AvalonMMSubordinate
 
 instance Protocol (AvalonMMManager dom config) where
@@ -876,22 +922,26 @@ instance Protocol (AvalonMMSubordinate dom fixedWaitTime config) where
   type Fwd (AvalonMMSubordinate dom fixedWaitTime config) = Signal dom (AvalonSubordinateIn config)
   type Bwd (AvalonMMSubordinate dom fixedWaitTime config) = Signal dom (AvalonSubordinateOut config)
 
-instance (GoodMMSubordinateConfig config, KeepWaitRequest config ~ 'True) => Backpressure (AvalonMMSubordinate dom 0 config) where
+instance (KnownMMSubordinateConfig config, KeepWaitRequest config ~ 'True) => Backpressure (AvalonMMSubordinate dom 0 config) where
   boolsToBwd _ = C.fromList_lazy . fmap boolToMMSubordinateAck
 
-instance (GoodMMManagerConfig config) => Backpressure (AvalonMMManager dom config) where
+instance (KnownMMManagerConfig config) => Backpressure (AvalonMMManager dom config) where
   boolsToBwd _ = C.fromList_lazy . fmap boolToMMManagerAck
 
--- TODO comment that this is a copypaste of the master one
--- TODO also comment that burstcount is forced to 1, and the reason why that is
-instance (GoodMMSubordinateConfig config, config ~ RemoveNonDfSubordinate config) =>
+-- 'toDfLike' and 'fromDfLike' here are very similar to their implementations in @instance DfConv.DfConv (AvalonMMManager ...)@.
+-- 'toDfCircuit' forces burstCount to be 1, will overwrite whatever value you specify in your WriteImpt and ReadReqImpt.
+-- In the case of write, this is because the user could otherwise send in a write with burst size of 2, but then send a read request along the same channel, which would either have to get dropped, or the write burst would have to be left unfinished.
+-- In the case of read request, this is because read data only comes in for one clock cycle, while a Df acknowledge can take a while to come in, so we need to store incoming read data; if we were allowed to have arbitrarily large burst sizes, we would need to store incoming read data in an arbitrarily-large buffer.
+instance (KnownMMSubordinateConfig config, config ~ RemoveNonDfSubordinate config) =>
   DfConv.DfConv   (AvalonMMSubordinate dom 0 config) where
   type Dom        (AvalonMMSubordinate dom 0 config) = dom
   type BwdPayload (AvalonMMSubordinate dom 0 config) = AvalonReadImpt (SShared config)
   type FwdPayload (AvalonMMSubordinate dom 0 config) = Either (AvalonReadReqImpt (KeepAddr config) (SShared config)) (AvalonWriteImpt (KeepAddr config) (SShared config))
 
   toDfCircuit proxy = DfConv.toDfCircuitHelper proxy s0 blankOtp stateFn where
-    s0 = (Nothing, False) -- TODO comment
+    s0 = (Nothing, False)
+    -- Nothing: readDatStored -- reads only get sent for one clock cycle, so we have to store it until it's acked
+    -- False: readReqAcked -- when our read request is acknowledged, we should stop sending the read request forwards
     blankOtp = mmSubordinateInNoData
     stateFn so dfAck dfDat = do
       (readDatStored, readReqAcked) <- get
@@ -925,7 +975,7 @@ instance (GoodMMSubordinateConfig config, config ~ RemoveNonDfSubordinate config
       pure (si, readDatStored', dfAckOut)
 
   fromDfCircuit proxy = DfConv.fromDfCircuitHelper proxy s0 blankOtp stateFn where
-    s0 = False -- TODO comment
+    s0 = False -- dfAckSt -- read request might be acked before read is sent back
     blankOtp = boolToMMSubordinateAck False
     stateFn si dfAck dfDat = do
       dfAckSt <- get
@@ -935,7 +985,7 @@ instance (GoodMMSubordinateConfig config, config ~ RemoveNonDfSubordinate config
       let dfAckSt' = Maybe.isJust readReqImpt && (dfAckSt || dfAck)
       let so = case (writeImpt, sendingReadDat) of
                  (Just _, _) -> boolToMMSubordinateAck dfAck
-                 (_, Just rdat) -> mmSubordinateReadDat rdat
+                 (_, Just rdat) -> mmReadImptToSubordinateOut rdat
                  _ -> boolToMMSubordinateAck False
       let dfDatOut = case (writeImpt, readReqImpt, dfAckSt) of
                        (Just wi, _, _) -> Just (Right wi)
@@ -945,16 +995,20 @@ instance (GoodMMSubordinateConfig config, config ~ RemoveNonDfSubordinate config
       put dfAckSt'
       pure (so, dfDatOut, dfAckOut)
 
--- TODO comment all the stuff mentioned in the other dflike
-instance (GoodMMManagerConfig config, config ~ RemoveNonDfManager config) =>
+-- 'toDfLike' and 'fromDfLike' here are very similar to their implementations in @instance DfConv.DfConv (AvalonMMManager ...)@.
+-- 'toDfCircuit' forces burstCount to be 1, will overwrite whatever value you specify in your WriteImpt and ReadReqImpt.
+-- In the case of write, this is because the user could otherwise send in a write with burst size of 2, but then send a read request along the same channel, which would either have to get dropped, or the write burst would have to be left unfinished.
+-- In the case of read request, this is because read data only comes in for one clock cycle, while a Df acknowledge can take a while to come in, so we need to store incoming read data; if we were allowed to have arbitrarily large burst sizes, we would need to store incoming read data in an arbitrarily-large buffer.
+instance (KnownMMManagerConfig config, config ~ RemoveNonDfManager config) =>
   DfConv.DfConv   (AvalonMMManager dom config) where
   type Dom        (AvalonMMManager dom config) = dom
   type BwdPayload (AvalonMMManager dom config) = AvalonReadImpt (MShared config)
   type FwdPayload (AvalonMMManager dom config) = Either (AvalonReadReqImpt 'True (MShared config)) (AvalonWriteImpt 'True (MShared config))
 
   toDfCircuit proxy = DfConv.toDfCircuitHelper proxy s0 blankOtp stateFn where
-    s0 = (Nothing, False) -- reads only get sent for one clock cycle, so we have to store it until it's acked
-    -- TODO comment: added "already waitrequest=false'd our read request" to state; don't ack df but stop sending forward mmReadReqImptToManagerOut
+    s0 = (Nothing, False)
+    -- Nothing: readDatStored -- reads only get sent for one clock cycle, so we have to store it until it's acked
+    -- False: readReqAcked -- when our read request is acknowledged, we should stop sending the read request forwards
     blankOtp = mmManagerOutNoData
     stateFn mi dfAck dfDat = do
       (readDatStored, readReqAcked) <- get
@@ -988,7 +1042,7 @@ instance (GoodMMManagerConfig config, config ~ RemoveNonDfManager config) =>
       pure (mo, readDatStored', dfAckOut)
 
   fromDfCircuit proxy = DfConv.fromDfCircuitHelper proxy s0 blankOtp stateFn where
-    s0 = False -- read request might be acked before read is sent back
+    s0 = False -- dfAckSt -- read request might be acked before read is sent back
     blankOtp = boolToMMManagerAck False
     stateFn mo dfAck dfDat = do
       dfAckSt <- get
@@ -998,7 +1052,7 @@ instance (GoodMMManagerConfig config, config ~ RemoveNonDfManager config) =>
       let dfAckSt' = Maybe.isJust readReqImpt && (dfAckSt || dfAck)
       let mi = case (writeImpt, sendingReadDat) of
                  (Just _, _) -> boolToMMManagerAck dfAck
-                 (_, Just rdat) -> mmManagerReadDat rdat
+                 (_, Just rdat) -> mmReadImptToManagerIn rdat
                  _ -> boolToMMManagerAck False
       let dfDatOut = case (writeImpt, readReqImpt, dfAckSt) of
                        (Just wi, _, _) -> Just (Right wi)
@@ -1008,7 +1062,7 @@ instance (GoodMMManagerConfig config, config ~ RemoveNonDfManager config) =>
       put dfAckSt'
       pure (mi, dfDatOut, dfAckOut)
 
-instance (GoodMMManagerConfig config, KnownDomain dom, config ~ RemoveNonDfManager config) =>
+instance (KnownMMManagerConfig config, KnownDomain dom, config ~ RemoveNonDfManager config) =>
   Simulate (AvalonMMManager dom config) where
   type SimulateFwdType (AvalonMMManager dom config) = [AvalonManagerOut config]
   type SimulateBwdType (AvalonMMManager dom config) = [AvalonManagerIn config]
@@ -1023,7 +1077,7 @@ instance (GoodMMManagerConfig config, KnownDomain dom, config ~ RemoveNonDfManag
     = withClockResetEnable clockGen resetGen enableGen
     $ DfConv.stall Proxy Proxy conf stallAck stalls
 
-instance (GoodMMSubordinateConfig config, KnownDomain dom, config ~ RemoveNonDfSubordinate config) =>
+instance (KnownMMSubordinateConfig config, KnownDomain dom, config ~ RemoveNonDfSubordinate config) =>
   Simulate (AvalonMMSubordinate dom 0 config) where
   type SimulateFwdType (AvalonMMSubordinate dom 0 config) = [AvalonSubordinateIn config]
   type SimulateBwdType (AvalonMMSubordinate dom 0 config) = [AvalonSubordinateOut config]
