@@ -38,9 +38,13 @@ import qualified Tests.Protocols.Df as DfTest
 ---------------------------- TESTS ----------------------------
 ---------------------------------------------------------------
 
-type SharedConfig = 'AvalonMMSharedConfig 2 'True 'True 2 'True 'True 2 'True 2 'True 'True 'True
-type ManagerConfig = 'AvalonMMManagerConfig 'False 'False 'False SharedConfig
-type SubordinateConfig = 'AvalonMMSubordinateConfig 'True 'True 'True 'False 'True 'False 'False 'False 'False SharedConfig
+type SharedConfig
+  = 'AvalonMMSharedConfig 2 'True 'True 2 'True 'True 2 'True 2 'True 'True 'True
+type ManagerConfig
+  = 'AvalonMMManagerConfig 'False 'False 'False SharedConfig
+type SubordinateConfig
+  = 'AvalonMMSubordinateConfig
+    'True 'True 'True 'False 'True 'False 'False 'False 'False SharedConfig
 
 genWriteImpt :: Gen (AvalonWriteImpt 'True SharedConfig)
 genWriteImpt =
@@ -84,7 +88,9 @@ prop_avalon_convert_manager_subordinate =
     defExpectOptions
     (DfTest.genData $ (Left <$> genReadReqImpt) C.<|> (Right <$> genWriteImpt))
     id
-    (C.withClockResetEnable @C.System C.clockGen C.resetGen C.enableGen $ DfConv.dfConvTestBench Proxy Proxy (repeat True) (repeat (Df.Data readImpt)) ckt)
+    ( C.withClockResetEnable @C.System C.clockGen C.resetGen C.enableGen
+    $ DfConv.dfConvTestBench Proxy Proxy (repeat True)
+      (repeat (Df.Data readImpt)) ckt)
  where
   ckt :: (C.HiddenClockResetEnable dom) => Circuit
     (AvalonMMManager dom ManagerConfig)
@@ -97,7 +103,9 @@ prop_avalon_convert_manager_subordinate_rev =
     defExpectOptions
     (DfTest.genData genReadImpt)
     id
-    (C.withClockResetEnable @C.System C.clockGen C.resetGen C.enableGen $ DfConv.dfConvTestBenchRev Proxy Proxy (repeat (Df.Data $ Left readReqImpt)) (repeat True) ckt)
+    ( C.withClockResetEnable @C.System C.clockGen C.resetGen C.enableGen
+    $ DfConv.dfConvTestBenchRev Proxy Proxy
+      (repeat (Df.Data $ Left readReqImpt)) (repeat True) ckt)
  where
   ckt :: (C.HiddenClockResetEnable dom) => Circuit
     (AvalonMMManager dom ManagerConfig)
@@ -110,7 +118,9 @@ prop_avalon_convert_subordinate_manager =
     defExpectOptions
     (DfTest.genData $ (Left <$> genReadReqImpt) C.<|> (Right <$> genWriteImpt))
     id
-    (C.withClockResetEnable @C.System C.clockGen C.resetGen C.enableGen $ DfConv.dfConvTestBench Proxy Proxy (repeat True) (repeat (Df.Data readImpt)) ckt)
+    ( C.withClockResetEnable @C.System C.clockGen C.resetGen C.enableGen
+    $ DfConv.dfConvTestBench Proxy Proxy (repeat True)
+      (repeat (Df.Data readImpt)) ckt)
  where
   ckt :: (C.HiddenClockResetEnable dom) => Circuit
     (AvalonMMSubordinate dom 0 SubordinateConfig)
@@ -123,7 +133,9 @@ prop_avalon_convert_subordinate_manager_rev =
     defExpectOptions
     (DfTest.genData genReadImpt)
     id
-    (C.withClockResetEnable @C.System C.clockGen C.resetGen C.enableGen $ DfConv.dfConvTestBenchRev Proxy Proxy (repeat (Df.Data $ Left readReqImpt)) (repeat True) ckt)
+    ( C.withClockResetEnable @C.System C.clockGen C.resetGen C.enableGen
+    $ DfConv.dfConvTestBenchRev Proxy Proxy
+      (repeat (Df.Data $ Left readReqImpt)) (repeat True) ckt)
  where
   ckt :: (C.HiddenClockResetEnable dom) => Circuit
     (AvalonMMSubordinate dom 0 SubordinateConfig)
